@@ -255,7 +255,7 @@ textarea{resize:vertical;line-height:1.6;font-family:'JetBrains Mono',monospace;
       <div class="logo-tag">Click Theory Capital · AI Hiring</div>
     </div>
   </div>
-  <div class="alive"><span class="alive-dot"></span>aarloo009@gmail.com</div>
+  <div class="alive"><span class="alive-dot"></span>prathyusha.hyra@gmail.com</div>
   <div class="tb-r">
     <button class="tb-btn" onclick="checkInbox()" id="inbox-btn">📬 Check Inbox</button>
     <span class="tb-msg" id="inbox-msg"></span>
@@ -274,7 +274,7 @@ textarea{resize:vertical;line-height:1.6;font-family:'JetBrains Mono',monospace;
   <div class="nav" onclick="gv('interview',this)"><span class="nav-ic">🎙</span>AI Interview Room</div>
   <div class="nav" onclick="gv('integrations',this)"><span class="nav-ic">⊕</span>Integrations</div>
   <div class="sb-foot">
-    <div class="sb-chip">AI: aarloo009@gmail.com</div>
+    <div class="sb-chip">AI: prathyusha.hyra@gmail.com</div>
   </div>
 </div>
 
@@ -469,12 +469,12 @@ textarea{resize:vertical;line-height:1.6;font-family:'JetBrains Mono',monospace;
     <div class="vhead-info"><div class="vh-title">Integrations</div><div class="vh-sub">Connected services and roadmap</div></div>
   </div>
   <div class="vbody">
-    <div class="alert al-g"><span>✓</span><div>Gmail MCP connected as aarloo009@gmail.com — sends emails, reads inbox for Loom submissions automatically.</div></div>
+    <div class="alert al-g"><span>✓</span><div>Gmail MCP connected as prathyusha.hyra@gmail.com — sends emails, reads inbox for Loom submissions automatically.</div></div>
     <div class="card">
       <div class="ctitle">Live Now</div>
       <div class="int-grid">
         <div class="int-card"><div class="int-ic">🧠</div><div class="int-n">Claude (Anthropic)</div><div class="int-d">Resume screening, interview analysis, scoring, email drafting</div><div class="int-s"><span class="is-dot d-live"></span><span class="s-live">claude-sonnet-4</span></div></div>
-        <div class="int-card"><div class="int-ic">📧</div><div class="int-n">Gmail MCP</div><div class="int-d">Sends candidate emails, reads inbox for Loom submissions</div><div class="int-s"><span class="is-dot d-live"></span><span class="s-live">aarloo009@gmail.com</span></div></div>
+        <div class="int-card"><div class="int-ic">📧</div><div class="int-n">Gmail MCP</div><div class="int-d">Sends candidate emails, reads inbox for Loom submissions</div><div class="int-s"><span class="is-dot d-live"></span><span class="s-live">prathyusha.hyra@gmail.com</span></div></div>
         <div class="int-card"><div class="int-ic">📞</div><div class="int-n">VAPI</div><div class="int-d">AI voice phone interviews — Alex conducts 15-min structured screens</div><div class="int-s"><span class="is-dot d-live"></span><span class="s-live">Connected</span></div></div>
         <div class="int-card"><div class="int-ic">🎥</div><div class="int-n">Apify Loom Scraper</div><div class="int-d">Extracts transcripts from candidate Loom assignment videos</div><div class="int-s"><span class="is-dot d-live"></span><span class="s-live">automation-lab/loom-scraper</span></div></div>
         <div class="int-card"><div class="int-ic">🔍</div><div class="int-n">Scraper API</div><div class="int-d">LinkedIn, GitHub, Google Scholar enrichment per candidate</div><div class="int-s"><span class="is-dot d-live"></span><span class="s-live">Connected</span></div></div>
@@ -988,7 +988,8 @@ async function startIV() {
       return;
     }
 
-   
+    // VAPI Web SDK uses PUBLIC key - check dashboard.vapi.ai > Account > Public Key
+    // If interview doesn't start, replace with your public key from VAPI dashboard
     var vapiPublicKey = window.VAPI_PUBLIC_KEY || '4cb4203b-9ea4-4098-86a1-0bec0a31763c';
     vapiSDK = new window.Vapi(vapiPublicKey);
 
@@ -1159,11 +1160,11 @@ async function sendScoreEmail(r, tr) {
   el.textContent = 'Sending scorecard to hiring manager...';
   try {
     await req('/api/test/send-email', 'POST', {
-      to: 'aarloo009@gmail.com',
+      to: 'prathyusha.hyra@gmail.com',
       subject: '[Interview] '+ivCandName+' — '+r.overall_score+'/100 — '+r.verdict,
       body: 'INTERVIEW SCORECARD\n'+'='.repeat(40)+'\nCandidate: '+ivCandName+'\nRole: '+ivCandRole+'\nScore: '+r.overall_score+'/100\nVerdict: '+r.verdict+'\n\nDIMENSIONS\n'+(r.dimensions||[]).map(function(d){return '  '+d.name+': '+d.score+'/10';}).join('\n')+'\n\nSTRENGTHS\n'+(r.key_strengths||[]).map(function(s){return '  • '+s;}).join('\n')+'\n\nSUMMARY\n'+r.summary+'\n\nTRANSCRIPT\n'+'='.repeat(40)+'\n'+tr
     });
-    el.textContent = '✓ Scorecard sent from aarloo009@gmail.com';
+    el.textContent = '✓ Scorecard sent from prathyusha.hyra@gmail.com';
   } catch(e) { el.textContent = '⚠ Email failed — check Gmail MCP'; }
 }
 
