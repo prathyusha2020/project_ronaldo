@@ -296,17 +296,23 @@ textarea{resize:vertical;line-height:1.6;font-family:'JetBrains Mono',monospace;
 <!-- VIDEO INTERVIEW ROOM -->
 <div class="view" id="v-interview">
   <div class="vhead">
-    <div class="vhead-info"><div class="vh-title">Video Interview Room</div><div class="vh-sub">Alex asks questions · candidate answers · Claude scores</div></div>
+    <div class="vhead-info"><div class="vh-title">Video Interview Room</div><div class="vh-sub" id="iv-mode-lbl">Alex asks structured questions · Claude scores your answers</div></div>
     <div class="vhead-r">
+      <button class="btn btn-sm" id="iv-cam-btn" onclick="toggleCamera()" title="Toggle camera">📷 Camera Off</button>
       <button class="btn btn-sm" onclick="closeIV()">✕ Close</button>
     </div>
   </div>
   <div class="iv-wrap">
     <!-- Stage / Question display -->
     <div class="iv-stage">
+      <!-- Camera preview (hidden by default) -->
+      <div id="iv-cam-preview" style="display:none;position:absolute;top:1rem;left:1rem;width:160px;height:110px;border-radius:10px;overflow:hidden;border:2px solid var(--grn-bd);background:#000;z-index:10">
+        <video id="iv-cam-video" autoplay muted playsinline style="width:100%;height:100%;object-fit:cover"></video>
+        <div style="position:absolute;bottom:4px;left:6px;font-size:9px;color:var(--grn);font-family:'JetBrains Mono',monospace;background:#00000088;padding:1px 5px;border-radius:3px">LIVE</div>
+      </div>
       <div class="iv-avatar" id="iv-avatar">A</div>
       <div class="iv-name-lbl">Alex</div>
-      <div class="iv-role-lbl">AI Technical Interviewer · Click Theory Capital</div>
+      <div class="iv-role-lbl" id="iv-role-lbl-txt">AI Technical Interviewer · Click Theory Capital</div>
       <div class="iv-question-box" id="iv-qbox">
         <div class="iv-q-label">Question <span id="iv-qnum">—</span> of <span id="iv-qtot">—</span></div>
         <div class="iv-q-text" id="iv-qtext">Click "Start Interview" to begin</div>
@@ -775,25 +781,79 @@ var ivCandName2 = '';
 var ivRecognition = null;
 var ivListening = false;
 var ivAudio = null;
+var ivCamStream = null;
+var ivCamOn = false;
+var ivMode = 'standard'; // 'standard' or 'technical'
 
 function setupIVDone() {
   ivCandName2 = document.getElementById('iv-name').value.trim() || 'Candidate';
   ivCandId    = document.getElementById('iv-cid').value.trim();
   document.getElementById('iv-setup').classList.remove('on');
-  // Load questions
-  fetch(API + '/api/interview/questions').then(function(r){return r.json();}).then(function(d){
+  // Load questions — candidate-specific (Loom-based) if available, else standard
+  var qUrl = ivCandId ? (API + '/api/interview/questions/' + ivCandId) : (API + '/api/interview/questions');
+  fetch(qUrl).then(function(r){return r.json();}).then(function(d){
     ivQuestions = d.questions || [];
+    ivMode = d.mode || 'standard';
     var tot = ivQuestions.length;
     document.getElementById('iv-qtot').textContent = tot;
     var prog = document.getElementById('iv-progress');
     prog.innerHTML = ivQuestions.map(function(_,i){return '<div class="iv-prog-dot" id="pd-'+i+'"></div>';}).join('');
+    // Update mode label
+    var modeLbl = document.getElementById('iv-mode-lbl');
+    if (modeLbl) {
+      modeLbl.textContent = ivMode === 'technical'
+        ? '⚡ Technical deep-dive · Questions based on your Loom assignment · Claude scores your answers'
+        : 'Alex asks structured questions · Claude scores your answers';
+    }
+    if (ivMode === 'technical') {
+      var roleLbl = document.getElementById('iv-role-lbl-txt');
+      if (roleLbl) roleLbl.textContent = 'Technical Interviewer · Drilling into your assignment · Click Theory Capital';
+    }
+    if (d.context) {
+      var el = document.getElementById('iv-status-txt');
+      if (el) el.textContent = 'Context: ' + d.context;
+    }
   });
+}
+
+// ── CAMERA TOGGLE ─────────────────────────────────────────────────
+async function toggleCamera() {
+  var btn = document.getElementById('iv-cam-btn');
+  var preview = document.getElementById('iv-cam-preview');
+  var video = document.getElementById('iv-cam-video');
+  if (!ivCamOn) {
+    try {
+      ivCamStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      video.srcObject = ivCamStream;
+      preview.style.display = 'block';
+      btn.textContent = '📷 Camera On';
+      btn.style.color = 'var(--grn)';
+      btn.style.borderColor = 'var(--grn-bd)';
+      ivCamOn = true;
+    } catch(e) {
+      alert('Camera access denied or not available: ' + e.message);
+    }
+  } else {
+    if (ivCamStream) { ivCamStream.getTracks().forEach(function(t){ t.stop(); }); ivCamStream = null; }
+    video.srcObject = null;
+    preview.style.display = 'none';
+    btn.textContent = '📷 Camera Off';
+    btn.style.color = '';
+    btn.style.borderColor = '';
+    ivCamOn = false;
+  }
 }
 
 function closeIV() {
   gv('dash', document.querySelector('.nav'));
   if (ivRecognition) { try{ivRecognition.stop();}catch(e){} }
   if (ivAudio) { ivAudio.pause(); ivAudio = null; }
+  // Stop camera if on
+  if (ivCamStream) { ivCamStream.getTracks().forEach(function(t){t.stop();}); ivCamStream = null; }
+  document.getElementById('iv-cam-preview').style.display = 'none';
+  var btn = document.getElementById('iv-cam-btn');
+  if (btn) { btn.textContent = '📷 Camera Off'; btn.style.color = ''; btn.style.borderColor = ''; }
+  ivCamOn = false;
   ivCurrentQ = 0; ivQALog = [];
 }
 
@@ -804,6 +864,10 @@ async function startIV() {
   document.getElementById('iv-submit-btn').disabled = false;
   ivCurrentQ = 0; ivQALog = [];
   document.getElementById('iv-qa-log').innerHTML = '';
+  // Cheerful welcome message for technical mode
+  if (ivMode === 'technical') {
+    document.getElementById('iv-status-txt').textContent = 'Technical deep-dive mode — questions based on your Loom assignment!';
+  }
   await askQuestion(0);
 }
 
@@ -841,9 +905,13 @@ async function askQuestion(idx) {
         document.getElementById('iv-answer').focus();
       };
     } else {
-      // Fallback Web Speech API
+      // Fallback Web Speech API — pick an upbeat voice
       if (window.speechSynthesis) {
         var utt = new SpeechSynthesisUtterance(q);
+        utt.rate = 1.05; utt.pitch = 1.1;
+        var voices = window.speechSynthesis.getVoices();
+        var preferred = voices.find(function(v){return v.name.includes('Google UK English Male')||v.name.includes('Daniel')||v.name.includes('Alex');});
+        if (preferred) utt.voice = preferred;
         utt.onend = function() {
           document.getElementById('iv-avatar').classList.remove('speaking');
           document.getElementById('iv-submit-btn').disabled = false;
@@ -883,8 +951,8 @@ async function submitAnswer() {
 }
 
 async function finishIV() {
-  document.getElementById('iv-status-txt').textContent = 'All questions answered — analyzing...';
-  document.getElementById('iv-qtext').textContent = 'Interview complete. Claude is evaluating your responses...';
+  document.getElementById('iv-status-txt').textContent = 'All questions answered — Claude is evaluating...';
+  document.getElementById('iv-qtext').textContent = 'Interview complete. Analyzing your responses...';
   document.getElementById('iv-qnum').textContent = '✓';
   document.getElementById('iv-submit-btn').disabled = true;
   document.getElementById('iv-answer').disabled = true;
@@ -906,21 +974,23 @@ async function finishIV() {
     document.getElementById('iv-qtext').textContent = result.verdict + ' · ' + result.overall_score + '/100';
     document.getElementById('iv-status-txt').textContent = result.summary || 'Analysis complete';
 
-    // Send email
+    // Update candidate in memory and trigger consolidated report
     if (ivCandId && cands[ivCandId]) {
       cands[ivCandId].video_interview = { score: result, completed_at: new Date().toISOString() };
       cands[ivCandId].stage = 'video_complete';
-      await req('/api/test/send-email','POST',{
-        to:'prathyusha.hyra@gmail.com',
-        subject:'[Video IV] '+ivCandName2+' — '+result.overall_score+'/100 — '+result.verdict,
-        body:'VIDEO INTERVIEW SCORECARD\n'+'='.repeat(40)+'\nCandidate: '+ivCandName2+'\nScore: '+result.overall_score+'/100\nVerdict: '+result.verdict+'\n\nDIMENSIONS\n'+(result.dimensions||[]).map(function(d){return '  '+d.name+': '+d.score+'/10 — '+d.note;}).join('\n')+'\n\nSTRENGTHS: '+(result.key_strengths||[]).join(', ')+'\nCONCERNS: '+(result.concerns||[]).join(', ')+'\n\nSUMMARY\n'+result.summary
-      });
       renderDash(); updateBadges();
     }
 
-    // Show result in qbox
+    // Auto-send scorecard email
+    await req('/api/test/send-email','POST',{
+      to:'prathyusha.hyra@gmail.com',
+      subject:'[Video IV] '+ivCandName2+' — '+result.overall_score+'/100 — '+result.verdict,
+      body:'VIDEO INTERVIEW SCORECARD\n'+'='.repeat(40)+'\nCandidate: '+ivCandName2+'\nMode: '+(ivMode==='technical'?'Technical Deep-Dive (Loom follow-up)':'Standard')+'\nScore: '+result.overall_score+'/100\nVerdict: '+result.verdict+'\n\nDIMENSIONS\n'+(result.dimensions||[]).map(function(d){return '  '+d.name+': '+d.score+'/10 — '+d.note;}).join('\n')+'\n\nSTRENGTHS: '+(result.key_strengths||[]).join(', ')+'\nCONCERNS: '+(result.concerns||[]).join(', ')+'\n\nSTANDOUT ANSWER: '+result.standout_answer+'\n\nSUMMARY\n'+result.summary+'\n\nRECOMMENDATION: '+result.recommendation
+    });
+
+    // Show result in question box
     document.getElementById('iv-qbox').style.borderColor = col;
-    document.getElementById('iv-qbox').innerHTML = '<div style="font-size:9px;color:'+col+';font-family:\'JetBrains Mono\',monospace;text-transform:uppercase;letter-spacing:.1em;margin-bottom:.5rem">Interview Complete</div><div style="font-size:28px;font-weight:700;color:'+col+';margin-bottom:.3rem">'+result.overall_score+'/100</div><div style="font-size:14px;font-weight:600;color:'+col+'">'+result.verdict+'</div><div style="font-size:12px;color:var(--tx2);margin-top:.5rem;line-height:1.6">'+result.summary+'</div>';
+    document.getElementById('iv-qbox').innerHTML = '<div style="font-size:9px;color:'+col+';font-family:\'JetBrains Mono\',monospace;text-transform:uppercase;letter-spacing:.1em;margin-bottom:.5rem">Interview Complete</div><div style="font-size:28px;font-weight:700;color:'+col+';margin-bottom:.3rem">'+result.overall_score+'/100</div><div style="font-size:14px;font-weight:600;color:'+col+'">'+result.verdict+'</div><div style="font-size:12px;color:var(--tx2);margin-top:.5rem;line-height:1.6">'+result.summary+'</div><div style="font-size:11px;color:var(--tx3);margin-top:.5rem;font-family:\'JetBrains Mono\',monospace">Consolidated report sent to human review ✓</div>';
 
   } catch(e) {
     document.getElementById('iv-status-txt').textContent = 'Analysis error: ' + e.message;
@@ -983,6 +1053,27 @@ function updateBadges() {
 }
 
 setInterval(refreshAll,20000);
+
+// ── URL PARAM: ?iv=candidateId opens interview room directly ───────
+(function(){
+  var params = new URLSearchParams(window.location.search);
+  var ivParam = params.get('iv');
+  if (ivParam) {
+    // Pre-fill setup modal with candidate info
+    document.getElementById('iv-cid').value = ivParam;
+    // Try to load candidate name from API
+    fetch(API + '/api/candidate/' + ivParam).then(function(r){return r.json();}).then(function(c){
+      if (c && c.name) {
+        document.getElementById('iv-name').value = c.name;
+        if (c.role || document.getElementById('iv-role-input')) {
+          document.getElementById('iv-role-input').value = c.role || 'AI/ML Engineer';
+        }
+      }
+    }).catch(function(){});
+    // Open interview view
+    gv('interview', document.querySelectorAll('.nav')[4]);
+  }
+})();
 </script>
 </body>
 </html>
