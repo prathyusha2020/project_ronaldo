@@ -18,8 +18,8 @@ VAPI_KEY        = os.getenv("VAPI_API_KEY", "6f419597-4f9f-49e2-b213-e338cb9b79e
 VAPI_PHONE_ID   = os.getenv("VAPI_PHONE_NUMBER_ID", "1dd79fa5-a150-4eb1-a164-936b5c6b5f1a")
 VAPI_ASSISTANT_ID = os.getenv("VAPI_ASSISTANT_ID", "06bf4f99-f38a-40b6-b3fb-0b3e55c8c71e")
 APIFY_KEY      = os.getenv("APIFY_API_KEY", "")
-REVIEWER_EMAIL = os.getenv("REVIEWER_EMAIL", "aarloo009@gmail.com")
-AI_EMAIL       = "aarloo009@gmail.com"
+REVIEWER_EMAIL = os.getenv("REVIEWER_EMAIL", "prathyusha.hyra@gmail.com")
+AI_EMAIL       = "prathyusha.hyra@gmail.com"
 APP_URL        = os.getenv("APP_URL", "http://localhost:8002")
 MODEL          = "claude-sonnet-4-20250514"
 
@@ -383,6 +383,11 @@ async def start_phone(request: Request, background_tasks: BackgroundTasks):
         },
         "assistantId": VAPI_ASSISTANT_ID,
         "assistantOverrides": {
+            "transcriber": {
+                "provider": "deepgram",
+                "model": "nova-2",
+                "language": "en"
+            },
             "model": {
                 "provider": "anthropic",
                 "model": MODEL,
@@ -776,10 +781,19 @@ Dashboard: {APP_URL}
 async def check_inbox(background_tasks: BackgroundTasks):
     try:
         response = await ask_claude(
-            f"You have access to Gmail for {AI_EMAIL}.",
-            "Search the inbox for emails containing a Loom video URL (loom.com/share). Return JSON array: [{\"from\":\"email\",\"loom_url\":\"url\"}]. Return [] if none found.",
-            max_tokens=500, mcp_servers=[GMAIL_MCP]
+            f"You are monitoring the Gmail inbox for {AI_EMAIL} as part of an AI hiring system.",
+            """Read the inbox and find any emails from candidates that contain a Loom video link (loom.com/share).
+For each such email, extract:
+- from: sender email address
+- loom_url: the full loom.com/share URL
+
+Return a JSON array only, no other text:
+[{"from": "candidate@email.com", "loom_url": "https://www.loom.com/share/abc123"}]
+
+If no Loom links found, return: []""",
+            max_tokens=800, mcp_servers=[GMAIL_MCP]
         )
+        print(f"[INBOX] Response: {response[:300]}")
         match = re.search(r"\[.*?\]", response, re.DOTALL)
         submissions = json.loads(match.group(0)) if match else []
         processed = []
@@ -845,6 +859,26 @@ async def delete_candidate(cid: str):
 # ══════════════════════════════════════════════════════════════════
 # TEST ENDPOINTS
 # ══════════════════════════════════════════════════════════════════
+
+@app.post("/api/test/send-email")
+async def test_send_email(request: Request):
+    """Send a test email via Gmail MCP — used by interview room to send scorecards"""
+    body = await request.json()
+    to      = body.get("to", REVIEWER_EMAIL)
+    subject = body.get("subject", "Test Email from HiringOS")
+    msg     = body.get("body", "This is a test email.")
+    try:
+        result = await ask_claude(
+            f"You are the AI recruiting system for Click Theory Capital using Gmail account {AI_EMAIL}. Send emails exactly as instructed.",
+            f"Send this email now using Gmail:\n\nTo: {to}\nSubject: {subject}\n\nBody:\n{msg}\n\nAfter sending, confirm with: SENT",
+            max_tokens=300, mcp_servers=[GMAIL_MCP]
+        )
+        print(f"[EMAIL] Sent to {to} | Result: {result[:100]}")
+        return JSONResponse({"ok": True, "sent_to": to, "result": result[:200]})
+    except Exception as e:
+        print(f"[EMAIL] Error: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
 
 @app.get("/api/test/gmail")
 async def test_gmail():
