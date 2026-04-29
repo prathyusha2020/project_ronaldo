@@ -511,7 +511,10 @@ textarea{resize:vertical;line-height:1.6;font-family:'JetBrains Mono',monospace;
 <!-- SETUP MODAL -->
 <div class="modal-bg" id="iv-modal">
   <div class="modal">
-    <div class="modal-title">AI Interview Room</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.25rem">
+      <div class="modal-title" style="margin-bottom:0">AI Interview Room</div>
+      <button onclick="document.getElementById('iv-modal').classList.remove('on');gv('dash',document.querySelector('.nav'));" style="background:none;border:none;color:var(--tx3);font-size:18px;cursor:pointer;padding:.25rem;line-height:1">✕</button>
+    </div>
     <div class="modal-sub">Alex (AI Recruiter) will conduct a 15-min technical phone screen. Fill in candidate details — leave phone blank and Alex speaks through your browser speakers instead.</div>
     <div class="field"><label>Candidate Name</label><input type="text" id="iv-name" placeholder="Priya Sharma"/></div>
     <div class="field"><label>Role</label><input type="text" id="iv-role" placeholder="AI/ML Engineer" value="AI/ML Engineer"/></div>
@@ -963,15 +966,32 @@ async function startIV() {
   try {
     // Load VAPI SDK dynamically
     if (!window.Vapi) {
-      await new Promise(function(res, rej) {
-        var s = document.createElement('script');
-        s.src = 'https://cdn.jsdelivr.net/npm/@vapi-ai/web@latest/dist/vapi.js';
-        s.onload = res; s.onerror = rej;
-        document.head.appendChild(s);
-      });
+      try {
+        await new Promise(function(res, rej) {
+          var s = document.createElement('script');
+          s.src = 'https://cdn.jsdelivr.net/npm/@vapi-ai/web@0.3.4/dist/vapi.js';
+          s.onload = function() { console.log('VAPI SDK loaded'); res(); };
+          s.onerror = function(e) { console.error('VAPI CDN failed:', e); rej(e); };
+          document.head.appendChild(s);
+        });
+      } catch(e) {
+        setIVStatus('error', 'VAPI SDK failed to load — check internet');
+        document.getElementById('iv-start').disabled = false;
+        document.getElementById('iv-start').textContent = 'Start Interview';
+        return;
+      }
+    }
+    if (!window.Vapi) {
+      setIVStatus('error', 'VAPI SDK not loaded');
+      document.getElementById('iv-start').disabled = false;
+      document.getElementById('iv-start').textContent = 'Start Interview';
+      return;
     }
 
-    vapiSDK = new window.Vapi('6f419597-4f9f-49e2-b213-e338cb9b79ea');
+    // VAPI Web SDK uses PUBLIC key - check dashboard.vapi.ai > Account > Public Key
+    // If interview doesn't start, replace with your public key from VAPI dashboard
+    var vapiPublicKey = window.VAPI_PUBLIC_KEY || '6f419597-4f9f-49e2-b213-e338cb9b79ea';
+    vapiSDK = new window.Vapi(vapiPublicKey);
 
     vapiSDK.on('call-start', function() {
       ivActive = true;
