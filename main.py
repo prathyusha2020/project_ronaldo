@@ -18,6 +18,7 @@ VAPI_KEY        = os.getenv("VAPI_API_KEY", "6f419597-4f9f-49e2-b213-e338cb9b79e
 VAPI_PHONE_ID   = os.getenv("VAPI_PHONE_NUMBER_ID", "1dd79fa5-a150-4eb1-a164-936b5c6b5f1a")
 VAPI_ASSISTANT_ID = os.getenv("VAPI_ASSISTANT_ID", "06bf4f99-f38a-40b6-b3fb-0b3e55c8c71e")
 APIFY_KEY      = os.getenv("APIFY_API_KEY", "")
+ELEVENLABS_KEY = os.getenv("ELEVENLABS_API_KEY", "")
 REVIEWER_EMAIL = os.getenv("REVIEWER_EMAIL", "prathyusha.hyra@gmail.com")
 AI_EMAIL       = "prathyusha.hyra@gmail.com"
 APP_URL        = os.getenv("APP_URL", "http://localhost:8002")
@@ -334,7 +335,7 @@ async def register(request: Request):
         "enrichment": body.get("enrichment", {}),
         "stage": "profiled",
         "phone_interview": {"call_id": None, "transcript": None, "score": None},
-        "video_interview": {"meet_link": None, "transcript": None, "score": None},
+        "video_interview": {"transcript": None, "score": None, "qa_log": []},
         "assignment": {"sent_at": None, "loom_url": None, "transcript": None, "score": None, "confidence": None},
         "final_score": None,
         "final_verdict": None,
@@ -383,25 +384,26 @@ async def start_phone(request: Request, background_tasks: BackgroundTasks):
         },
         "assistantId": VAPI_ASSISTANT_ID,
         "assistantOverrides": {
-            "transcriber": {
-                "provider": "deepgram",
-                "model": "nova-2",
-                "language": "en"
-            },
             "model": {
                 "provider": "anthropic",
                 "model": MODEL,
-                "systemPrompt": script
+                "systemPrompt": script,
+                "maxTokens": 1000,
+                "temperature": 0.7
             },
             "voice": {
                 "provider": "11labs",
-                "voiceId": "rachel"
+                "voiceId": "21m00Tcm4TlvDq8ikWAM",
+                "stability": 0.5,
+                "similarityBoost": 0.75
             },
             "firstMessage": f"Hi, is this {cand['name']}? This is Alex calling from Click Theory Capital. I am reaching out about the {settings_db['role']} position you applied for. Do you have about 15 minutes for a quick phone screen?",
-            "endCallMessage": f"Thank you {cand['name']}. We will be in touch within 48 hours with next steps. Have a great day!",
+            "endCallMessage": f"Thank you so much {cand['name']}. We will be in touch within 48 hours with next steps. Have a great rest of your day!",
             "maxDurationSeconds": 960,
-            "silenceTimeoutSeconds": 30,
-            "endCallPhrases": ["goodbye", "take care", "talk soon", "have a great day"]
+            "silenceTimeoutSeconds": 20,
+            "backgroundSound": "off",
+            "backchannelingEnabled": True,
+            "endCallPhrases": ["have a great day", "goodbye", "take care", "talk soon", "bye bye"]
         },
         "metadata": {"candidate_id": cid, "stage": "phone"}
     }
@@ -496,6 +498,190 @@ async def _analyze_phone(cid: str):
     except Exception as e:
         add_event(cid, f"Phone analysis error: {e}")
         print(f"[ANALYZE] raw: {raw[:200]}")
+
+
+# ══════════════════════════════════════════════════════════════════
+# TEXT + VOICE INTERVIEW (Claude questions + ElevenLabs TTS)
+# ══════════════════════════════════════════════════════════════════
+
+INTERVIEW_QUESTIONS = [
+    "Tell me about yourself and your background in AI engineering.",
+    "Walk me through your most impressive AI project in production.",
+    "How do you handle non-deterministic LLM output in a production system?",
+    "Describe a multi-step autonomous agent you have built — what was the architecture?",
+    "If you had one week to build a lead qualification agent for us, what would your approach be?",
+    "What excites you most about AI engineering right now?",
+    "What questions do you have for us about the role at Click Theory Capital?"
+]
+
+@app.post("/api/interview/start")
+async def interview_start(request: Request):
+    """Start a text/voice interview session for a candidate"""
+    body = await request.json()
+    cid  = body.get("candidate_id", "")
+    cand = candidates_db.get(cid)
+    if not cand:
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    # Reset video interview state
+    cand["video_interview"] = {"transcript": None, "score": None, "qa_log": []}
+    cand["stage"] = "video_interview"
+    add_event(cid, "Text/voice interview session started")
+
+    first_q = INTERVIEW_QUESTIONS[0]
+    intro = f"Hi {cand['name']}! I am Alex from Click Theory Capital. I will be conducting your technical interview today for the {settings_db['role']} position. I will ask you {len(INTERVIEW_QUESTIONS)} questions. Take your time with each answer. Let us begin.\n\n{first_q}"
+
+    cand["video_interview"]["qa_log"].append({
+        "q_index": 0,
+        "question": first_q,
+        "answer": None
+    })
+
+    return JSONResponse({
+        "question_index": 0,
+        "question": first_q,
+        "intro": intro,
+        "total_questions": len(INTERVIEW_QUESTIONS)
+    })
+
+
+@app.post("/api/interview/answer")
+async def interview_answer(request: Request, background_tasks: BackgroundTasks):
+    """Submit answer to current question, get next question or finish"""
+    body     = await request.json()
+    cid      = body.get("candidate_id", "")
+    answer   = body.get("answer", "").strip()
+    q_index  = body.get("question_index", 0)
+    cand     = candidates_db.get(cid)
+    if not cand:
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    qa_log = cand["video_interview"].get("qa_log", [])
+
+    # Save answer
+    if qa_log and len(qa_log) > q_index:
+        qa_log[q_index]["answer"] = answer
+    else:
+        qa_log.append({"q_index": q_index, "question": INTERVIEW_QUESTIONS[q_index] if q_index < len(INTERVIEW_QUESTIONS) else "", "answer": answer})
+
+    next_index = q_index + 1
+
+    # All questions answered — analyze
+    if next_index >= len(INTERVIEW_QUESTIONS):
+        cand["video_interview"]["qa_log"] = qa_log
+        background_tasks.add_task(_analyze_video_interview, cid)
+        return JSONResponse({
+            "done": True,
+            "message": f"Thank you {cand['name']}! That concludes the interview. We will analyze your responses and get back to you within 48 hours. You did great!",
+            "total_questions": len(INTERVIEW_QUESTIONS)
+        })
+
+    # Next question
+    next_q = INTERVIEW_QUESTIONS[next_index]
+
+    # Claude generates a follow-up or transition
+    transition = await ask_claude(
+        "You are Alex, an AI recruiter. Given the candidate's answer, write ONE short acknowledgment sentence (10-15 words) then move to the next question naturally. Be warm and professional.",
+        f"Candidate answer: {answer}\n\nNext question to ask: {next_q}\n\nWrite: [acknowledgment]. [next question]"
+    )
+
+    qa_log.append({"q_index": next_index, "question": next_q, "answer": None})
+    cand["video_interview"]["qa_log"] = qa_log
+
+    return JSONResponse({
+        "done": False,
+        "question_index": next_index,
+        "question": next_q,
+        "transition": transition or next_q,
+        "total_questions": len(INTERVIEW_QUESTIONS)
+    })
+
+
+async def _analyze_video_interview(cid: str):
+    cand = candidates_db.get(cid)
+    if not cand:
+        return
+    qa_log = cand["video_interview"].get("qa_log", [])
+    if not qa_log:
+        return
+
+    # Build transcript from QA log
+    transcript = "\n\n".join([
+        f"Q{i+1}: {qa.get('question','')}\nAnswer: {qa.get('answer','[no answer]')}"
+        for i, qa in enumerate(qa_log)
+    ])
+    cand["video_interview"]["transcript"] = transcript
+
+    raw = await ask_claude(
+        f"""You are a senior hiring manager at Click Theory Capital.
+Analyze this technical interview for the {settings_db['role']} role.
+Return ONLY valid JSON:
+{{
+  "overall_score": 0,
+  "verdict": "Advance|Maybe|Reject",
+  "dimensions": [
+    {{"name": "Technical Depth", "score": 0, "note": ""}},
+    {{"name": "Production Experience", "score": 0, "note": ""}},
+    {{"name": "Communication", "score": 0, "note": ""}},
+    {{"name": "Problem Solving", "score": 0, "note": ""}},
+    {{"name": "Cultural Fit", "score": 0, "note": ""}}
+  ],
+  "key_strengths": [],
+  "concerns": [],
+  "standout_answer": "best answer they gave",
+  "summary": "2-3 sentence assessment",
+  "recommendation": "specific next step"
+}}""",
+        f"Candidate: {cand['name']}\nRole: {settings_db['role']}\nResume Score: {cand.get('score',0)}/100\n\nInterview Q&A:\n{transcript}"
+    )
+
+    try:
+        result = json.loads(raw.replace("```json","").replace("```","").strip())
+        cand["video_interview"]["score"] = result
+        cand["stage"] = "video_analyzed"
+        score = result.get("overall_score", 0)
+        add_event(cid, f"Video interview analyzed — {score}/100 — {result.get('verdict')}", score)
+
+        # Send assignment if good enough
+        if score >= 60 and result.get("verdict") != "Reject":
+            body_txt = settings_db["assignment_template"].format(
+                name=cand["name"], role=settings_db["role"],
+                submit_url=f"{APP_URL}/submit/{cid}"
+            )
+            await _send_email(cand["email"],
+                f"Next Step — Technical Assignment — {settings_db['role']} — Click Theory Capital",
+                body_txt)
+            cand["stage"] = "assignment_sent"
+            add_event(cid, f"Assignment email sent to {cand['email']}")
+        else:
+            await _send_rejection(cid, "video")
+    except Exception as e:
+        add_event(cid, f"Video analysis error: {e}")
+        print(f"[VIDEO ANALYSIS] error: {e} raw: {raw[:200]}")
+
+
+@app.post("/api/interview/tts")
+async def interview_tts(request: Request):
+    """Generate speech from text using ElevenLabs"""
+    body = await request.json()
+    text = body.get("text", "")
+    if not text or not ELEVENLABS_KEY:
+        return JSONResponse({"error": "no text or no ElevenLabs key"}, status_code=400)
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                "https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM",
+                headers={"xi-api-key": ELEVENLABS_KEY, "Content-Type": "application/json"},
+                json={"text": text, "model_id": "eleven_monolingual_v1",
+                      "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}}
+            )
+        if resp.status_code == 200:
+            audio_b64 = base64.b64encode(resp.content).decode()
+            return JSONResponse({"audio_b64": audio_b64, "format": "mp3"})
+        else:
+            return JSONResponse({"error": f"ElevenLabs error: {resp.status_code}"}, status_code=500)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -906,8 +1092,114 @@ async def test_calendar():
 
 
 # ══════════════════════════════════════════════════════════════════
+# ELEVENLABS VIDEO INTERVIEW (Claude Q&A + ElevenLabs TTS)
+# ══════════════════════════════════════════════════════════════════
+
+ELEVENLABS_KEY = os.getenv("ELEVENLABS_API_KEY", "")
+ELEVENLABS_VOICE = "21m00Tcm4TlvDq8ikWAM"  # Rachel
+
+# Interview questions per stage
+IV_QUESTIONS = [
+    "To start, can you walk me through your most impressive AI project in production?",
+    "How do you handle non-deterministic LLM output in a production system? Walk me through your approach.",
+    "Describe the architecture of a multi-step autonomous agent you have built.",
+    "If you had one week to build a lead qualification agent for a B2B sales team, what is your exact approach?",
+    "What is your experience with RAG systems and vector databases specifically?",
+    "Why AI engineering? What excites you most about this field right now?",
+]
+
+@app.post("/api/interview/tts")
+async def interview_tts(request: Request):
+    """Convert text to speech using ElevenLabs — returns audio bytes"""
+    body = await request.json()
+    text = body.get("text", "")
+    if not text:
+        return JSONResponse({"error": "no text"}, status_code=400)
+
+    if ELEVENLABS_KEY:
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(
+                    f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE}",
+                    headers={"xi-api-key": ELEVENLABS_KEY, "Content-Type": "application/json"},
+                    json={"text": text, "model_id": "eleven_monolingual_v1",
+                          "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}}
+                )
+            if resp.status_code == 200:
+                audio_b64 = base64.b64encode(resp.content).decode()
+                return JSONResponse({"audio": audio_b64, "type": "audio/mpeg"})
+        except Exception as e:
+            print(f"ElevenLabs TTS error: {e}")
+
+    # Fallback — return empty, browser will use Web Speech API
+    return JSONResponse({"audio": None, "fallback": True, "text": text})
+
+
+@app.post("/api/interview/evaluate")
+async def interview_evaluate(request: Request):
+    """Claude evaluates full interview Q&A and returns score"""
+    body = await request.json()
+    cid     = body.get("candidate_id", "")
+    qa_log  = body.get("qa_log", [])  # [{q, a}, ...]
+    cand    = candidates_db.get(cid)
+    name    = cand["name"] if cand else body.get("name", "Candidate")
+    role    = settings_db.get("role", "AI/ML Engineer")
+
+    qa_text = "\n\n".join([f"Q: {item['q']}\nA: {item['a']}" for item in qa_log])
+
+    raw = await ask_claude(
+        f"""You are a senior hiring manager at Click Theory Capital evaluating a video interview for a {role} role.
+Analyze these question-answer pairs and return ONLY valid JSON:
+{{
+  "overall_score": 0-100,
+  "verdict": "Strong Hire|Hire|Maybe|Reject",
+  "dimensions": [
+    {{"name": "Technical Depth", "score": 0-10, "note": ""}},
+    {{"name": "Production Experience", "score": 0-10, "note": ""}},
+    {{"name": "Communication", "score": 0-10, "note": ""}},
+    {{"name": "Problem Solving", "score": 0-10, "note": ""}},
+    {{"name": "Cultural Fit", "score": 0-10, "note": ""}}
+  ],
+  "key_strengths": [],
+  "concerns": [],
+  "standout_answer": "best answer they gave",
+  "summary": "2-3 sentence assessment",
+  "recommendation": "specific next step"
+}}""",
+        f"Candidate: {name}\nRole: {role}\n\nInterview Q&A:\n{qa_text}"
+    )
+    try:
+        result = json.loads(raw.replace("```json", "").replace("```", "").strip())
+
+        # Store in candidate profile if cid provided
+        if cid and cid in candidates_db:
+            candidates_db[cid]["video_interview"] = {
+                "qa_log": qa_log,
+                "score": result,
+                "completed_at": datetime.now().isoformat()
+            }
+            candidates_db[cid]["stage"] = "video_complete"
+            add_event(cid, f"Video interview complete — {result.get('overall_score')}/100 — {result.get('verdict')}",
+                      result.get("overall_score"))
+
+        return JSONResponse(result)
+    except Exception as e:
+        return JSONResponse({"error": str(e), "raw": raw[:300]}, status_code=500)
+
+
+@app.get("/api/interview/questions")
+async def get_questions():
+    return JSONResponse({"questions": IV_QUESTIONS})
+
+
+# ══════════════════════════════════════════════════════════════════
 # SERVE
 # ══════════════════════════════════════════════════════════════════
+
+@app.get("/interview")
+async def interview_page():
+    return FileResponse("static/interview.html")
+
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
