@@ -384,26 +384,16 @@ async def start_phone(request: Request, background_tasks: BackgroundTasks):
         },
         "assistantId": VAPI_ASSISTANT_ID,
         "assistantOverrides": {
-            "model": {
-                "provider": "anthropic",
-                "model": MODEL,
-                "systemPrompt": script,
-                "maxTokens": 1000,
-                "temperature": 0.7
-            },
-            "voice": {
-                "provider": "11labs",
-                "voiceId": "21m00Tcm4TlvDq8ikWAM",
-                "stability": 0.5,
-                "similarityBoost": 0.75
-            },
-            "firstMessage": f"Hi, is this {cand['name']}? This is Alex calling from Click Theory Capital. I am reaching out about the {settings_db['role']} position you applied for. Do you have about 15 minutes for a quick phone screen?",
-            "endCallMessage": f"Thank you so much {cand['name']}. We will be in touch within 48 hours with next steps. Have a great rest of your day!",
+            # NOTE: Do NOT override model here — it causes instant call drop.
+            # The assistant already has a model configured in VAPI dashboard.
+            # Only override firstMessage, voice settings, and timing.
+            "firstMessage": f"Hi, is this {cand['name']}? This is Alex calling from Click Theory Capital — I'm reaching out about the {settings_db['role']} position you applied for. Do you have about 15 minutes for a quick phone screen?",
+            "endCallMessage": f"Wonderful, thank you so much {cand['name']}! We will be in touch within 48 hours with next steps. Have a fantastic rest of your day!",
             "maxDurationSeconds": 960,
             "silenceTimeoutSeconds": 20,
             "backgroundSound": "off",
             "backchannelingEnabled": True,
-            "endCallPhrases": ["have a great day", "goodbye", "take care", "talk soon", "bye bye"]
+            "endCallPhrases": ["have a great day", "goodbye", "take care", "talk soon", "bye bye", "thank you goodbye"]
         },
         "metadata": {"candidate_id": cid, "stage": "phone"}
     }
@@ -642,19 +632,26 @@ Return ONLY valid JSON:
         score = result.get("overall_score", 0)
         add_event(cid, f"Video interview analyzed — {score}/100 — {result.get('verdict')}", score)
 
-        # Send assignment if good enough
-        if score >= 60 and result.get("verdict") != "Reject":
-            body_txt = settings_db["assignment_template"].format(
-                name=cand["name"], role=settings_db["role"],
-                submit_url=f"{APP_URL}/submit/{cid}"
-            )
-            await _send_email(cand["email"],
-                f"Next Step — Technical Assignment — {settings_db['role']} — Click Theory Capital",
-                body_txt)
-            cand["stage"] = "assignment_sent"
-            add_event(cid, f"Assignment email sent to {cand['email']}")
+        # ── Compute consolidated final score ──
+        r_score  = cand.get("score", 0)
+        ph_score = (cand["phone_interview"].get("score") or {}).get("overall_score", 0)
+        lo_score = (cand.get("assignment", {}).get("score") or {}).get("content_score", 0)
+        lo_conf  = cand.get("assignment", {}).get("confidence", 0)
+        vi_score = score
+
+        if lo_score:
+            # Full pipeline: Resume 20% + Phone 25% + Loom 20% + Confidence 5% + Video 30%
+            final = int(r_score * 0.20 + ph_score * 0.25 + lo_score * 0.20 + lo_conf * 0.05 + vi_score * 0.30)
         else:
-            await _send_rejection(cid, "video")
+            # No Loom yet: Resume 25% + Phone 35% + Video 40%
+            final = int(r_score * 0.25 + ph_score * 0.35 + vi_score * 0.40)
+
+        cand["final_score"]   = final
+        cand["final_verdict"] = result.get("verdict", "")
+        cand["stage"]         = "ready_for_review"
+        add_event(cid, f"Final score computed — {final}/100 — {cand['final_verdict']}", final)
+        await _notify_reviewer(cid)
+
     except Exception as e:
         add_event(cid, f"Video analysis error: {e}")
         print(f"[VIDEO ANALYSIS] error: {e} raw: {raw[:200]}")
@@ -670,10 +667,11 @@ async def interview_tts(request: Request):
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
-                "https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM",
+                "https://api.elevenlabs.io/v1/text-to-speech/pNInz6obpgDQGcFmaJgB",
                 headers={"xi-api-key": ELEVENLABS_KEY, "Content-Type": "application/json"},
-                json={"text": text, "model_id": "eleven_monolingual_v1",
-                      "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}}
+                json={"text": text, "model_id": "eleven_turbo_v2",
+                      "voice_settings": {"stability": 0.35, "similarity_boost": 0.80,
+                                         "style": 0.45, "use_speaker_boost": True}}
             )
         if resp.status_code == 200:
             audio_b64 = base64.b64encode(resp.content).decode()
@@ -880,18 +878,67 @@ Return ONLY valid JSON:
         result = json.loads(raw.replace("```json", "").replace("```", "").strip())
         cand["assignment"]["score"] = result
         cand["assignment"]["confidence"] = result.get("confidence_score", 0)
+        add_event(cid, f"Loom analyzed — {result.get('content_score',0)}/100 — {result.get('verdict','')}")
 
-        r  = cand.get("score", 0)
-        ph = (cand["phone_interview"].get("score") or {}).get("overall_score", 0)
-        lo = result.get("content_score", 0)
-        co = result.get("confidence_score", 0)
-        final = int(r * 0.30 + ph * 0.35 + lo * 0.25 + co * 0.10)
+        # Generate harder technical interview questions based on what they built in the Loom
+        what_they_built = result.get("what_they_built", "")
+        loom_summary    = result.get("summary", "")
+        tech_qs_raw = await ask_claude(
+            f"""You are a senior technical interviewer at Click Theory Capital evaluating an AI Engineer candidate.
+The candidate submitted a Loom video of their assignment. Based on what they built, generate 6 challenging follow-up technical questions.
+Questions should:
+- Probe technical depth on choices they made
+- Challenge their architecture decisions
+- Test edge cases they may not have considered
+- Be harder than standard interview questions
+- Be specific to what they built (not generic)
 
-        cand["final_score"]   = final
-        cand["final_verdict"] = result.get("verdict", "")
-        cand["stage"]         = "ready_for_review"
-        add_event(cid, f"Loom analyzed — {lo}/100 — Final: {final}/100", lo)
-        await _notify_reviewer(cid)
+Return ONLY valid JSON:
+{{
+  "questions": [
+    "question 1",
+    "question 2",
+    "question 3",
+    "question 4",
+    "question 5",
+    "question 6"
+  ],
+  "focus_areas": ["area1", "area2"]
+}}""",
+            f"Candidate: {cand['name']}\nRole: {settings_db['role']}\n\nWhat they built: {what_they_built}\nLoom summary: {loom_summary}\nLoom transcript excerpt: {(cand['assignment'].get('transcript',''))[:2000]}"
+        )
+        try:
+            qs_data = json.loads(tech_qs_raw.replace("```json","").replace("```","").strip())
+            cand["assignment"]["technical_questions"] = qs_data.get("questions", [])
+            cand["assignment"]["focus_areas"] = qs_data.get("focus_areas", [])
+            add_event(cid, f"Generated {len(cand['assignment']['technical_questions'])} technical follow-up questions from Loom")
+        except Exception as e:
+            cand["assignment"]["technical_questions"] = []
+            print(f"[LOOM] Failed to generate questions: {e}")
+
+        cand["stage"] = "loom_complete"
+        # Send email to candidate to join video interview room
+        submit_url = f"{APP_URL}/submit/{cid}"
+        interview_url = f"{APP_URL}?iv={cid}"
+        await _send_email(cand["email"],
+            f"Final Stage — Technical Video Interview — {settings_db['role']} — Click Theory Capital",
+            f"""Hi {cand['name']},
+
+Congratulations — your Loom assignment has been reviewed and we're impressed with your work!
+
+You have been selected for the final stage: a Technical Video Interview with our AI interviewer Alex.
+
+This is a more in-depth technical session that will build on your assignment. Expect harder questions about your architectural choices and technical decisions.
+
+To start your video interview, click here:
+{interview_url}
+
+The interview takes approximately 20-25 minutes. You can use text or voice to answer.
+
+We look forward to seeing you!
+The Click Theory Capital Team""")
+        add_event(cid, f"Technical interview invitation sent to {cand['email']}")
+
     except Exception as e:
         add_event(cid, f"Loom error: {e}")
 
@@ -930,33 +977,65 @@ async def _notify_reviewer(cid: str):
     cand = candidates_db.get(cid)
     if not cand:
         return
-    asgn = cand.get("assignment", {})
-    sc   = asgn.get("score", {}) or {}
-    body = f"""CANDIDATE READY FOR REVIEW
-{'='*40}
-Name:  {cand['name']}
-Email: {cand['email']}
+    asgn   = cand.get("assignment", {})
+    lo_sc  = asgn.get("score", {}) or {}
+    vi_sc  = (cand.get("video_interview", {}) or {}).get("score", {}) or {}
+    ph_sc  = (cand["phone_interview"].get("score") or {})
+    focus  = asgn.get("focus_areas", [])
 
-SCORES
-  Resume:     {cand.get('score',0)}/100
-  Phone:      {(cand['phone_interview'].get('score') or {}).get('overall_score','—')}/100
-  Loom:       {sc.get('content_score','—')}/100
-  Confidence: {asgn.get('confidence','—')}%
-  FINAL:      {cand.get('final_score','—')}/100
+    dims_phone = "\n".join([f"  {d['name']}: {d['score']}/10 — {d.get('note','')}"
+                            for d in ph_sc.get("dimensions", [])]) if ph_sc else "  N/A"
+    dims_video = "\n".join([f"  {d['name']}: {d['score']}/10 — {d.get('note','')}"
+                            for d in vi_sc.get("dimensions", [])]) if vi_sc else "  N/A"
 
-Verdict: {cand.get('final_verdict','')}
-Built:   {sc.get('what_they_built','')}
-Summary: {sc.get('summary','')}
+    body = f"""CANDIDATE READY FOR HUMAN REVIEW
+{'='*50}
+Name:   {cand['name']}
+Email:  {cand['email']}
+Phone:  {cand.get('phone','')}
 
-NOTE: {sc.get('human_review_notes','Video review required')}
+══ CONSOLIDATED SCORES ══
+  Resume:         {cand.get('score',0)}/100
+  Phone Screen:   {ph_sc.get('overall_score','—')}/100
+  Loom Assignment:{lo_sc.get('content_score','—')}/100
+  AI Confidence:  {asgn.get('confidence','—')}%
+  Video Interview:{vi_sc.get('overall_score','—')}/100
+  ─────────────────────
+  FINAL SCORE:    {cand.get('final_score','—')}/100
+  VERDICT:        {cand.get('final_verdict','')}
 
-Loom:      {asgn.get('loom_url','')}
+══ PHONE INTERVIEW ══
+Score: {ph_sc.get('overall_score','—')}/100 | {ph_sc.get('verdict','')}
+Summary: {ph_sc.get('summary','')}
+Strengths: {', '.join(ph_sc.get('key_strengths',[]))}
+Concerns: {', '.join(ph_sc.get('concerns',[]))}
+{dims_phone}
+
+══ LOOM ASSIGNMENT ══
+Score: {lo_sc.get('content_score','—')}/100
+Built: {lo_sc.get('what_they_built','')}
+Summary: {lo_sc.get('summary','')}
+Focus Areas Tested: {', '.join(focus)}
+Loom URL: {asgn.get('loom_url','')}
+NOTE: {lo_sc.get('human_review_notes','Video review required — AI analysis from transcript only')}
+
+══ TECHNICAL VIDEO INTERVIEW ══
+Score: {vi_sc.get('overall_score','—')}/100 | {vi_sc.get('verdict','')}
+Summary: {vi_sc.get('summary','')}
+Standout Answer: {vi_sc.get('standout_answer','')}
+Strengths: {', '.join(vi_sc.get('key_strengths',[]))}
+Concerns: {', '.join(vi_sc.get('concerns',[]))}
+{dims_video}
+
+══ RECOMMENDATION ══
+{vi_sc.get('recommendation','') or ph_sc.get('recommendation','')}
+
 Dashboard: {APP_URL}
 """
     await _send_email(REVIEWER_EMAIL,
-        f"[REVIEW] {cand['name']} — Final: {cand.get('final_score','?')}/100 — {cand.get('final_verdict','')}",
+        f"[REVIEW READY] {cand['name']} — Final: {cand.get('final_score','?')}/100 — {cand.get('final_verdict','')}",
         body)
-    add_event(cid, "Reviewer notified by email")
+    add_event(cid, "Consolidated report emailed to reviewer")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1096,7 +1175,8 @@ async def test_calendar():
 # ══════════════════════════════════════════════════════════════════
 
 ELEVENLABS_KEY = os.getenv("ELEVENLABS_API_KEY", "")
-ELEVENLABS_VOICE = "21m00Tcm4TlvDq8ikWAM"  # Rachel
+# Adam — warm, cheerful, professional male voice
+ELEVENLABS_VOICE = "pNInz6obpgDQGcFmaJgB"
 
 # Interview questions per stage
 IV_QUESTIONS = [
@@ -1122,8 +1202,9 @@ async def interview_tts(request: Request):
                 resp = await client.post(
                     f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE}",
                     headers={"xi-api-key": ELEVENLABS_KEY, "Content-Type": "application/json"},
-                    json={"text": text, "model_id": "eleven_monolingual_v1",
-                          "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}}
+                    json={"text": text, "model_id": "eleven_turbo_v2",
+                          "voice_settings": {"stability": 0.35, "similarity_boost": 0.80,
+                                             "style": 0.45, "use_speaker_boost": True}}
                 )
             if resp.status_code == 200:
                 audio_b64 = base64.b64encode(resp.content).decode()
@@ -1190,6 +1271,25 @@ Analyze these question-answer pairs and return ONLY valid JSON:
 @app.get("/api/interview/questions")
 async def get_questions():
     return JSONResponse({"questions": IV_QUESTIONS})
+
+@app.get("/api/interview/questions/{cid}")
+async def get_questions_for_candidate(cid: str):
+    """Get technical questions for a specific candidate.
+    If they have Loom-generated questions, use those (harder, specific to their build).
+    Otherwise fall back to standard questions."""
+    cand = candidates_db.get(cid)
+    if cand:
+        loom_qs = (cand.get("assignment") or {}).get("technical_questions", [])
+        if loom_qs and len(loom_qs) >= 4:
+            what_built = (cand.get("assignment") or {}).get("score", {}).get("what_they_built", "")
+            focus = (cand.get("assignment") or {}).get("focus_areas", [])
+            return JSONResponse({
+                "questions": loom_qs,
+                "mode": "technical",
+                "context": f"Based on their assignment: {what_built}",
+                "focus_areas": focus
+            })
+    return JSONResponse({"questions": IV_QUESTIONS, "mode": "standard"})
 
 
 # ══════════════════════════════════════════════════════════════════
