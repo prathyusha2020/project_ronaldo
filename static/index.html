@@ -988,9 +988,8 @@ async function startIV() {
       return;
     }
 
-    // VAPI Web SDK uses PUBLIC key - check dashboard.vapi.ai > Account > Public Key
-    // If interview doesn't start, replace with your public key from VAPI dashboard
-    var vapiPublicKey = window.VAPI_PUBLIC_KEY || '6f419597-4f9f-49e2-b213-e338cb9b79ea';
+   
+    var vapiPublicKey = window.VAPI_PUBLIC_KEY || '4cb4203b-9ea4-4098-86a1-0bec0a31763c';
     vapiSDK = new window.Vapi(vapiPublicKey);
 
     vapiSDK.on('call-start', function() {
