@@ -1,0 +1,886 @@
+import os, json, httpx, re, base64, asyncio, io
+from fastapi import FastAPI, Request, UploadFile, File, BackgroundTasks
+from fastapi.responses import StreamingResponse, JSONResponse, FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
+from datetime import datetime
+
+load_dotenv()
+
+app = FastAPI()
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# ── CONFIG ────────────────────────────────────────────────────────
+ANTHROPIC_KEY  = os.getenv("ANTHROPIC_API_KEY", "")
+SCRAPER_KEY    = os.getenv("SCRAPER_API_KEY", "49c37c3cf7160706fa45cfd94c68b39c")
+VAPI_KEY        = os.getenv("VAPI_API_KEY", "6f419597-4f9f-49e2-b213-e338cb9b79ea")
+VAPI_PHONE_ID   = os.getenv("VAPI_PHONE_NUMBER_ID", "1dd79fa5-a150-4eb1-a164-936b5c6b5f1a")
+VAPI_ASSISTANT_ID = os.getenv("VAPI_ASSISTANT_ID", "06bf4f99-f38a-40b6-b3fb-0b3e55c8c71e")
+APIFY_KEY      = os.getenv("APIFY_API_KEY", "")
+REVIEWER_EMAIL = os.getenv("REVIEWER_EMAIL", "aarloo009@gmail.com")
+AI_EMAIL       = "aarloo009@gmail.com"
+APP_URL        = os.getenv("APP_URL", "http://localhost:8002")
+MODEL          = "claude-sonnet-4-20250514"
+
+HEADERS = {
+    "x-api-key": ANTHROPIC_KEY,
+    "anthropic-version": "2023-06-01",
+    "content-type": "application/json"
+}
+HEADERS_MCP = {**HEADERS, "anthropic-beta": "mcp-client-2025-04-04"}
+HEADERS_PDF = {**HEADERS, "anthropic-beta": "pdfs-2024-09-25"}
+
+GMAIL_MCP = {"type": "url", "url": "https://gmailmcp.googleapis.com/mcp/v1", "name": "gmail-mcp"}
+GCAL_MCP  = {"type": "url", "url": "https://calendarmcp.googleapis.com/mcp/v1", "name": "gcal-mcp"}
+
+# ── IN-MEMORY STORE ───────────────────────────────────────────────
+candidates_db = {}
+
+# ── AUTO-POLLER: checks active VAPI calls every 30s ───────────────
+async def _poll_active_calls():
+    """Background task — polls VAPI for any calls in phone_interview stage.
+    This means webhook is NOT required — works even without ngrok/Railway."""
+    while True:
+        await asyncio.sleep(30)
+        for cid, cand in list(candidates_db.items()):
+            if cand.get("stage") != "phone_interview":
+                continue
+            call_id = cand.get("phone_interview", {}).get("call_id", "")
+            if not call_id:
+                continue
+            # Already has transcript — skip
+            if cand["phone_interview"].get("transcript"):
+                continue
+            try:
+                async with httpx.AsyncClient(timeout=15) as client:
+                    resp = await client.get(
+                        f"https://api.vapi.ai/call/{call_id}",
+                        headers={"Authorization": f"Bearer {VAPI_KEY}"}
+                    )
+                data = resp.json()
+                status     = data.get("status", "")
+                transcript = (data.get("transcript") or
+                              data.get("artifact", {}).get("transcript") or "")
+                summary    = data.get("summary", "")
+                print(f"[POLLER] cid={cid} call={call_id} status={status} transcript={len(transcript)} summary={len(summary)}")
+                if status in ("ended", "completed") and (transcript or summary):
+                    cand["phone_interview"]["transcript"] = transcript
+                    cand["phone_interview"]["summary"]    = summary
+                    cand["stage"] = "phone_complete"
+                    add_event(cid, f"Call ended (polled) — transcript: {len(transcript)} chars")
+                    asyncio.create_task(_analyze_phone(cid))
+            except Exception as e:
+                print(f"[POLLER] error for {cid}: {e}")
+
+@app.on_event("startup")
+async def startup():
+    asyncio.create_task(_poll_active_calls())
+    print("[STARTUP] Auto-poller started — checks active VAPI calls every 30s")
+settings_db = {
+    "company": "Click Theory Capital",
+    "role": "AI/ML Engineer",
+    "phone_script": "You are Alex, a senior AI recruiter at Click Theory Capital.\nCandidate: {name} | Role: {role}\n\nSTRUCTURE (15 min):\n1. Warm welcome + Click Theory intro (1 min)\n2. Walk me through your most impressive AI project (3 min)\n3. How do you handle non-deterministic LLM output in production? (3 min)\n4. Describe a multi-step autonomous agent you built (3 min)\n5. Build a lead qualification agent in one week — your approach? (3 min)\n6. Why AI engineering + motivation (2 min)\n7. Close + next steps (1 min)\n\nBe warm but professional. Probe vague answers. End: 'We will be in touch within 48 hours.'\nDo not reveal you are an AI.",
+    "assignment_template": "Hi {name},\n\nCongratulations — you have passed the interview stages for the {role} role at Click Theory Capital!\n\nFor the final stage, please complete this assignment within 72 hours:\n\nTASK: Build an AI-powered lead qualification agent\n1. Accept a list of company names as input\n2. Research each company using web search\n3. Score each lead against an ICP (B2B, 50-500 employees, tech-forward)\n4. Draft a personalized outreach email per lead\n5. Return structured JSON output\n\nTech: Python + any LLM API (Claude preferred)\nSubmit via: {submit_url}\n\nWe look forward to seeing what you build!\nThe Click Theory Capital Team",
+    "job_profile": {
+        "criteria": "3+ years Python. LLM API experience (OpenAI/Anthropic). Production AI deployment. Agentic frameworks (LangChain/CrewAI). RAG + vector databases.",
+        "mustHave": "Production AI systems, LLM API hands-on, agent/workflow experience",
+        "redFlags": "Tutorial-only experience, no production systems, no LLM API experience"
+    }
+}
+
+
+# ══════════════════════════════════════════════════════════════════
+# CLAUDE HELPERS
+# ══════════════════════════════════════════════════════════════════
+
+async def ask_claude(system: str, user: str, max_tokens: int = 2000, mcp_servers: list = None) -> str:
+    payload = {
+        "model": MODEL,
+        "max_tokens": max_tokens,
+        "system": system,
+        "messages": [{"role": "user", "content": user}]
+    }
+    if mcp_servers:
+        payload["mcp_servers"] = mcp_servers
+    hdrs = HEADERS_MCP if mcp_servers else HEADERS
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post("https://api.anthropic.com/v1/messages", headers=hdrs, json=payload)
+    data = resp.json()
+    parts = []
+    for block in data.get("content", []):
+        if block.get("type") == "text":
+            parts.append(block.get("text", ""))
+        elif block.get("type") == "mcp_tool_result":
+            for inner in block.get("content", []):
+                if inner.get("type") == "text":
+                    parts.append(inner.get("text", ""))
+    return "\n".join(p for p in parts if p)
+
+
+@app.post("/api/stream")
+async def stream_endpoint(request: Request):
+    body = await request.json()
+    async def generate():
+        async with httpx.AsyncClient(timeout=120) as client:
+            async with client.stream("POST", "https://api.anthropic.com/v1/messages",
+                headers=HEADERS,
+                json={"model": MODEL, "max_tokens": 2000, "stream": True,
+                      "system": body.get("system", ""),
+                      "messages": [{"role": "user", "content": body.get("user", "")}]}
+            ) as resp:
+                async for chunk in resp.aiter_bytes():
+                    yield chunk
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.post("/api/ask")
+async def ask_endpoint(request: Request):
+    body = await request.json()
+    text = await ask_claude(body.get("system", ""), body.get("user", ""),
+                             mcp_servers=body.get("mcp_servers"))
+    return JSONResponse({"text": text})
+
+
+# ══════════════════════════════════════════════════════════════════
+# SETTINGS
+# ══════════════════════════════════════════════════════════════════
+
+@app.get("/api/settings")
+async def get_settings():
+    return JSONResponse(settings_db)
+
+@app.post("/api/settings")
+async def save_settings(request: Request):
+    body = await request.json()
+    settings_db.update(body)
+    return JSONResponse({"ok": True})
+
+
+# ══════════════════════════════════════════════════════════════════
+# PDF EXTRACTION
+# ══════════════════════════════════════════════════════════════════
+
+@app.post("/api/extract")
+async def extract_pdf(file: UploadFile = File(...)):
+    content = await file.read()
+    filename = file.filename or "resume.pdf"
+    text = ""
+
+    # Method 1: pdfplumber (fast, local, no API cost)
+    try:
+        import pdfplumber
+        with pdfplumber.open(io.BytesIO(content)) as pdf:
+            pages = [p.extract_text() or "" for p in pdf.pages]
+            text = "\n\n".join(p for p in pages if p).strip()
+        print(f"[pdfplumber] extracted {len(text)} chars from {filename}")
+    except Exception as e:
+        print(f"[pdfplumber] failed: {e}")
+
+    # Method 2: Claude PDF API (fallback for scanned PDFs)
+    if len(text) < 100:
+        try:
+            b64 = base64.b64encode(content).decode()
+            async with httpx.AsyncClient(timeout=90) as client:
+                resp = await client.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers=HEADERS_PDF,
+                    json={"model": MODEL, "max_tokens": 3000,
+                          "messages": [{"role": "user", "content": [
+                              {"type": "document", "source": {
+                                  "type": "base64",
+                                  "media_type": "application/pdf",
+                                  "data": b64
+                              }},
+                              {"type": "text", "text": "Extract ALL text from this resume. Return raw text only, preserve structure."}
+                          ]}]}
+                )
+            data = resp.json()
+            text = "".join(c.get("text", "") for c in data.get("content", []))
+            print(f"[claude-pdf] extracted {len(text)} chars")
+        except Exception as e:
+            print(f"[claude-pdf] failed: {e}")
+
+    if len(text) < 20:
+        text = f"Could not extract text from {filename}. Please paste the resume text manually."
+
+    return JSONResponse({"text": text.strip(), "filename": filename, "chars": len(text)})
+
+
+# ══════════════════════════════════════════════════════════════════
+# SCREEN RESUME
+# ══════════════════════════════════════════════════════════════════
+
+@app.post("/api/screen")
+async def screen_resume(request: Request):
+    body = await request.json()
+    profile = settings_db.get("job_profile", {})
+    raw = await ask_claude(
+        f"""You are an expert AI/ML hiring manager at Click Theory Capital.
+Screen this resume against the job profile below.
+Job Profile: {json.dumps(profile)}
+
+Return ONLY valid JSON, no markdown, no extra text:
+{{
+  "name": "",
+  "email": "",
+  "phone": "",
+  "linkedin": "",
+  "github": "",
+  "google_scholar": "",
+  "score": 0,
+  "verdict": "Strong Hire|Hire|Maybe|No Hire",
+  "summary": "one sentence",
+  "dimensions": [
+    {{"name": "AI/ML Experience", "score": 0, "note": ""}},
+    {{"name": "Production Systems", "score": 0, "note": ""}},
+    {{"name": "LLM/Agent Skills", "score": 0, "note": ""}},
+    {{"name": "Python/Engineering", "score": 0, "note": ""}},
+    {{"name": "Communication", "score": 0, "note": ""}}
+  ],
+  "strengths": [],
+  "concerns": [],
+  "assessment": "2-3 sentences",
+  "outreach_email": {{"subject": "", "body": ""}},
+  "rejection_email": {{"subject": "", "body": ""}}
+}}""",
+        f"Resume:\n{body.get('resume', '')}"
+    )
+    try:
+        result = json.loads(raw.replace("```json", "").replace("```", "").strip())
+        return JSONResponse(result)
+    except Exception as e:
+        return JSONResponse({"error": str(e), "raw": raw[:300]}, status_code=500)
+
+
+# ══════════════════════════════════════════════════════════════════
+# LINKEDIN / GITHUB / SCHOLAR ENRICHMENT
+# ══════════════════════════════════════════════════════════════════
+
+async def scrape_url(url: str, max_chars: int = 5000) -> str:
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get("http://api.scraperapi.com",
+                params={"api_key": SCRAPER_KEY, "url": url, "render": "true"})
+        clean = re.sub(r"<[^>]+>", " ", resp.text)
+        return re.sub(r"\s+", " ", clean).strip()[:max_chars]
+    except Exception as e:
+        return ""
+
+
+@app.post("/api/enrich")
+async def enrich_candidate(request: Request):
+    body = await request.json()
+    name     = body.get("name", "")
+    linkedin = body.get("linkedin", "")
+    github   = body.get("github", "")
+    scholar  = body.get("google_scholar", "")
+
+    async def get_linkedin():
+        url = linkedin if linkedin.startswith("http") else f"https://www.google.com/search?q={name.replace(' ','+')}+site:linkedin.com/in"
+        return await scrape_url(url, 4000)
+
+    async def get_github():
+        url = github if github.startswith("http") else f"https://www.google.com/search?q={name.replace(' ','+')}+site:github.com"
+        return await scrape_url(url, 4000)
+
+    async def get_scholar():
+        url = scholar if scholar.startswith("http") else f"https://scholar.google.com/scholar?q={name.replace(' ','+')}"
+        return await scrape_url(url, 3000)
+
+    li_text, gh_text, sch_text = await asyncio.gather(get_linkedin(), get_github(), get_scholar())
+
+    combined = f"LINKEDIN:\n{li_text}\n\nGITHUB:\n{gh_text}\n\nSCHOLAR:\n{sch_text}"
+
+    raw = await ask_claude(
+        """Extract structured candidate intelligence from these scraped profiles.
+Return ONLY valid JSON:
+{
+  "linkedin_profile": {"title": "", "company": "", "location": "", "skills": [], "experience": []},
+  "github_profile": {"username": "", "top_languages": [], "notable_projects": [], "contribution_level": ""},
+  "scholar_profile": {"papers": [], "citations": 0, "research_areas": []},
+  "impressive_signals": [],
+  "red_flags": [],
+  "enrichment_score": 0
+}""",
+        f"Candidate: {name}\n\n{combined}"
+    )
+    try:
+        return JSONResponse(json.loads(raw.replace("```json", "").replace("```", "").strip()))
+    except:
+        return JSONResponse({"enrichment_score": 0, "impressive_signals": [], "red_flags": []})
+
+
+# ══════════════════════════════════════════════════════════════════
+# CANDIDATE PIPELINE
+# ══════════════════════════════════════════════════════════════════
+
+@app.post("/api/pipeline/register")
+async def register(request: Request):
+    body = await request.json()
+    cid = "c" + str(int(datetime.now().timestamp() * 1000))
+    candidates_db[cid] = {
+        "id": cid,
+        "name": body.get("name", ""),
+        "email": body.get("email", ""),
+        "phone": body.get("phone", ""),
+        "linkedin": body.get("linkedin", ""),
+        "github": body.get("github", ""),
+        "resume_text": body.get("resume_text", ""),
+        "score": body.get("score", 0),
+        "verdict": body.get("verdict", ""),
+        "assessment": body.get("assessment", ""),
+        "dimensions": body.get("dimensions", []),
+        "enrichment": body.get("enrichment", {}),
+        "stage": "profiled",
+        "phone_interview": {"call_id": None, "transcript": None, "score": None},
+        "video_interview": {"meet_link": None, "transcript": None, "score": None},
+        "assignment": {"sent_at": None, "loom_url": None, "transcript": None, "score": None, "confidence": None},
+        "final_score": None,
+        "final_verdict": None,
+        "human_decision": None,
+        "created_at": datetime.now().isoformat(),
+        "events": [{"time": datetime.now().isoformat(), "event": "Resume screened", "score": body.get("score", 0)}]
+    }
+    return JSONResponse({"candidate_id": cid, "candidate": candidates_db[cid]})
+
+
+def add_event(cid: str, event: str, score=None):
+    if cid in candidates_db:
+        ev = {"time": datetime.now().isoformat(), "event": event}
+        if score is not None:
+            ev["score"] = score
+        candidates_db[cid]["events"].append(ev)
+
+
+# ══════════════════════════════════════════════════════════════════
+# PHONE INTERVIEW
+# ══════════════════════════════════════════════════════════════════
+
+@app.post("/api/pipeline/phone/start")
+async def start_phone(request: Request, background_tasks: BackgroundTasks):
+    body  = await request.json()
+    cid   = body.get("candidate_id", "")
+    cand  = candidates_db.get(cid)
+    if not cand:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    phone = body.get("phone") or cand.get("phone", "")
+    if not phone:
+        return JSONResponse({"error": "no phone number"}, status_code=400)
+
+    # Ensure phone has + prefix
+    if not phone.startswith("+"):
+        phone = "+" + phone
+
+    script = settings_db["phone_script"].format(
+        name=cand["name"], role=settings_db["role"])
+
+    vapi_payload = {
+        "phoneNumberId": VAPI_PHONE_ID,
+        "customer": {
+            "number": phone,
+            "name": cand["name"]
+        },
+        "assistantId": VAPI_ASSISTANT_ID,
+        "assistantOverrides": {
+            "model": {
+                "provider": "anthropic",
+                "model": MODEL,
+                "systemPrompt": script
+            },
+            "voice": {
+                "provider": "11labs",
+                "voiceId": "rachel"
+            },
+            "firstMessage": f"Hi, is this {cand['name']}? This is Alex calling from Click Theory Capital. I am reaching out about the {settings_db['role']} position you applied for. Do you have about 15 minutes for a quick phone screen?",
+            "endCallMessage": f"Thank you {cand['name']}. We will be in touch within 48 hours with next steps. Have a great day!",
+            "maxDurationSeconds": 960,
+            "silenceTimeoutSeconds": 30,
+            "endCallPhrases": ["goodbye", "take care", "talk soon", "have a great day"]
+        },
+        "metadata": {"candidate_id": cid, "stage": "phone"}
+    }
+
+    print(f"[VAPI] Placing call to {phone} — phoneNumberId={VAPI_PHONE_ID} assistantId={VAPI_ASSISTANT_ID}")
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            "https://api.vapi.ai/call/phone",
+            headers={"Authorization": f"Bearer {VAPI_KEY}", "content-type": "application/json"},
+            json=vapi_payload
+        )
+
+    data = resp.json()
+    print(f"[VAPI] Response: {json.dumps(data)[:400]}")
+
+    if "error" in data or resp.status_code >= 400:
+        err = data.get("message") or data.get("error") or str(data)
+        add_event(cid, f"VAPI error: {err}")
+        return JSONResponse({"error": err, "vapi_response": data}, status_code=400)
+
+    call_id = data.get("id", "")
+    candidates_db[cid]["phone_interview"]["call_id"] = call_id
+    candidates_db[cid]["phone_interview"]["phone_used"] = phone
+    candidates_db[cid]["stage"] = "phone_interview"
+    add_event(cid, f"Phone call placed — ID: {call_id} — calling {phone}")
+    return JSONResponse({"call_id": call_id, "status": "calling", "phone": phone})
+
+
+@app.post("/api/pipeline/phone/analyze")
+async def analyze_phone(request: Request, background_tasks: BackgroundTasks):
+    body = await request.json()
+    cid  = body.get("candidate_id", "")
+    tr   = body.get("transcript", "")
+    if cid and cid in candidates_db and tr:
+        candidates_db[cid]["phone_interview"]["transcript"] = tr
+        candidates_db[cid]["stage"] = "phone_complete"
+        background_tasks.add_task(_analyze_phone, cid)
+    return JSONResponse({"status": "analyzing"})
+
+
+async def _analyze_phone(cid: str):
+    cand = candidates_db.get(cid)
+    if not cand:
+        return
+    transcript = cand["phone_interview"].get("transcript", "")
+    summary    = cand["phone_interview"].get("summary", "")
+    content    = transcript if len(transcript) >= len(summary) else summary
+    if not content:
+        add_event(cid, "No transcript or summary to analyze")
+        return
+
+    add_event(cid, "Analyzing interview with Claude...")
+    raw = await ask_claude(
+        "You are a senior hiring manager at Click Theory Capital. Analyze this phone interview for an AI Engineer role. Return ONLY valid JSON: {" + chr(10) +
+        '  "overall_score": 0,' + chr(10) +
+        '  "verdict": "Advance|Maybe|Reject",' + chr(10) +
+        '  "dimensions": [' + chr(10) +
+        '    {"name": "Technical Depth", "score": 0, "note": ""},' + chr(10) +
+        '    {"name": "Production Experience", "score": 0, "note": ""},' + chr(10) +
+        '    {"name": "Communication", "score": 0, "note": ""},' + chr(10) +
+        '    {"name": "Problem Solving", "score": 0, "note": ""},' + chr(10) +
+        '    {"name": "Cultural Fit", "score": 0, "note": ""}' + chr(10) +
+        '  ],' + chr(10) +
+        '  "key_strengths": [],' + chr(10) +
+        '  "concerns": [],' + chr(10) +
+        '  "summary": "2-3 sentences",' + chr(10) +
+        '  "recommendation": ""' + chr(10) +
+        "}",
+        f"Candidate: {cand['name']}\nRole: {settings_db['role']}\nResume score: {cand.get('score',0)}/100\n\nInterview content:\n{content}"
+    )
+    try:
+        result = json.loads(raw.replace("```json", "").replace("```", "").strip())
+        cand["phone_interview"]["score"]   = result
+        cand["phone_interview"]["summary"] = result.get("summary", summary)
+        cand["stage"] = "phone_analyzed"
+        score   = result.get("overall_score", 0)
+        verdict = result.get("verdict", "")
+        add_event(cid, f"Phone analyzed — {score}/100 — {verdict}", score)
+        if score >= 65 and verdict != "Reject":
+            body_txt = settings_db["assignment_template"].format(
+                name=cand["name"], role=settings_db["role"],
+                submit_url=f"{APP_URL}/submit/{cid}"
+            )
+            await _send_email(cand["email"],
+                f"Next Step — Technical Assignment — {settings_db['role']} — Click Theory Capital",
+                body_txt)
+            cand["stage"] = "assignment_sent"
+            add_event(cid, f"Assignment email sent to {cand['email']}")
+        else:
+            await _send_rejection(cid, "phone")
+    except Exception as e:
+        add_event(cid, f"Phone analysis error: {e}")
+        print(f"[ANALYZE] raw: {raw[:200]}")
+
+
+# ══════════════════════════════════════════════════════════════════
+# VAPI WEBHOOK
+# ══════════════════════════════════════════════════════════════════
+
+@app.post("/api/webhook/vapi")
+async def vapi_webhook(request: Request, background_tasks: BackgroundTasks):
+    body = await request.json()
+    print(f"[VAPI WEBHOOK] type={body.get('type','')} message_type={body.get('message',{}).get('type','')}")
+
+    # VAPI sends either top-level type or nested message.type
+    msg_type = body.get("type") or body.get("message", {}).get("type", "")
+
+    if msg_type == "end-of-call-report":
+        # Extract from both possible structures
+        call_data = body.get("call") or body.get("message", {}).get("call", {}) or {}
+        transcript = (body.get("transcript") or
+                      body.get("message", {}).get("transcript") or
+                      body.get("artifact", {}).get("transcript") or "")
+        summary    = (body.get("summary") or
+                      body.get("message", {}).get("summary") or "")
+        meta       = call_data.get("metadata") or {}
+        cid        = meta.get("candidate_id", "")
+
+        print(f"[VAPI WEBHOOK] call ended — cid={cid} transcript_len={len(transcript)} summary_len={len(summary)}")
+
+        if cid and cid in candidates_db:
+            cand = candidates_db[cid]
+            cand["phone_interview"]["transcript"] = transcript
+            cand["phone_interview"]["summary"]    = summary
+            cand["phone_interview"]["call_data"]  = call_data
+            cand["stage"] = "phone_complete"
+            add_event(cid, f"Call ended — transcript: {len(transcript)} chars — summary: {len(summary)} chars")
+            if transcript or summary:
+                background_tasks.add_task(_analyze_phone, cid)
+            else:
+                add_event(cid, "WARNING: No transcript received from VAPI")
+
+    return JSONResponse({"received": True})
+
+
+@app.get("/api/pipeline/phone/status/{call_id}")
+async def check_call_status(call_id: str, background_tasks: BackgroundTasks):
+    """Poll VAPI for call status and transcript when webhook is not set up"""
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"https://api.vapi.ai/call/{call_id}",
+                headers={"Authorization": f"Bearer {VAPI_KEY}"}
+            )
+        data = resp.json()
+        status     = data.get("status", "")
+        transcript = data.get("transcript") or data.get("artifact", {}).get("transcript") or ""
+        summary    = data.get("summary", "")
+
+        print(f"[POLL] call={call_id} status={status} transcript={len(transcript)} summary={len(summary)}")
+
+        # Find candidate by call_id
+        cid = None
+        for c_id, c in candidates_db.items():
+            if c.get("phone_interview", {}).get("call_id") == call_id:
+                cid = c_id
+                break
+
+        if cid and status in ("ended", "completed") and (transcript or summary):
+            cand = candidates_db[cid]
+            if not cand["phone_interview"].get("transcript"):
+                cand["phone_interview"]["transcript"] = transcript
+                cand["phone_interview"]["summary"]    = summary
+                cand["stage"] = "phone_complete"
+                add_event(cid, f"Call status polled — transcript: {len(transcript)} chars")
+                background_tasks.add_task(_analyze_phone, cid)
+
+        return JSONResponse({"status": status, "transcript_len": len(transcript),
+                             "summary_len": len(summary), "candidate_id": cid})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ══════════════════════════════════════════════════════════════════
+# LOOM SUBMISSION
+# ══════════════════════════════════════════════════════════════════
+
+@app.get("/submit/{cid}")
+async def submit_page(cid: str):
+    cand = candidates_db.get(cid)
+    name = cand["name"] if cand else "Candidate"
+    return HTMLResponse(f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"/><title>Submit — Click Theory Capital</title>
+<style>*{{box-sizing:border-box}}body{{font-family:-apple-system,sans-serif;max-width:480px;margin:4rem auto;padding:2rem;background:#09090b;color:#e4e4e7}}
+h1{{font-size:22px;font-weight:600;margin-bottom:.4rem}}p{{color:#a1a1aa;line-height:1.65;margin-bottom:1.5rem;font-size:14px}}
+input{{width:100%;padding:.8rem;border:1px solid #27272a;border-radius:8px;font-size:14px;margin-bottom:1rem;background:#18181b;color:#e4e4e7}}
+button{{background:#22c55e;color:#000;border:none;padding:.8rem 1.5rem;border-radius:8px;font-size:14px;cursor:pointer;width:100%;font-weight:600}}
+button:disabled{{opacity:.4}}.ok{{background:#052e16;border:1px solid #166534;color:#22c55e;padding:1rem;border-radius:8px;display:none;margin-top:1rem;font-size:14px}}</style></head>
+<body><h1>Submit Your Assignment</h1>
+<p>Hi {name}! Record a Loom video walking through your AI agent build, then paste the link below.</p>
+<input type="url" id="u" placeholder="https://www.loom.com/share/..."/>
+<button id="b" onclick="sub()">Submit Video</button>
+<div class="ok" id="ok">Submitted! You will hear back within 24 hours.</div>
+<script>
+async function sub(){{
+  const u=document.getElementById('u').value.trim();
+  if(!u||!u.includes('loom')){{alert('Paste a valid Loom URL');return;}}
+  const b=document.getElementById('b');b.disabled=true;b.textContent='Submitting...';
+  await fetch('/api/pipeline/loom/submit',{{method:'POST',headers:{{'Content-Type':'application/json'}},
+  body:JSON.stringify({{candidate_id:'{cid}',loom_url:u}})}});
+  document.getElementById('ok').style.display='block';b.textContent='Submitted';
+}}</script></body></html>""")
+
+
+@app.post("/api/pipeline/loom/submit")
+async def loom_submit(request: Request, background_tasks: BackgroundTasks):
+    body = await request.json()
+    cid  = body.get("candidate_id", "")
+    url  = body.get("loom_url", "")
+    if cid and cid in candidates_db:
+        candidates_db[cid]["assignment"]["loom_url"] = url
+        candidates_db[cid]["stage"] = "loom_submitted"
+        add_event(cid, f"Loom submitted: {url}")
+        background_tasks.add_task(_analyze_loom, cid, url)
+    return JSONResponse({"status": "received"})
+
+
+async def _fetch_loom_apify(url: str) -> str:
+    if not APIFY_KEY:
+        return ""
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            start = await client.post(
+                "https://api.apify.com/v2/acts/automation-lab~loom-scraper/runs",
+                headers={"Authorization": f"Bearer {APIFY_KEY}", "Content-Type": "application/json"},
+                json={"videoUrls": [url]}
+            )
+            run_id = start.json().get("data", {}).get("id", "")
+            if not run_id:
+                return ""
+            for _ in range(18):
+                await asyncio.sleep(10)
+                poll = await client.get(
+                    f"https://api.apify.com/v2/actor-runs/{run_id}",
+                    headers={"Authorization": f"Bearer {APIFY_KEY}"}
+                )
+                status = poll.json().get("data", {}).get("status", "")
+                if status in ("SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"):
+                    break
+            if status != "SUCCEEDED":
+                return ""
+            items = (await client.get(
+                f"https://api.apify.com/v2/actor-runs/{run_id}/dataset/items",
+                headers={"Authorization": f"Bearer {APIFY_KEY}"}
+            )).json()
+            if not items:
+                return ""
+            item = items[0]
+            raw = item.get("transcript", "")
+            tr = " ".join(s.get("text", "") for s in raw) if isinstance(raw, list) else str(raw)
+            meta = f"[{item.get('title','')} | {item.get('duration','')}]\n\n"
+            return (meta + tr).strip()
+    except Exception as e:
+        print(f"Apify error: {e}")
+        return ""
+
+
+async def _analyze_loom(cid: str, loom_url: str):
+    cand = candidates_db.get(cid)
+    if not cand:
+        return
+    transcript = await _fetch_loom_apify(loom_url)
+    if not transcript:
+        transcript = await scrape_url(loom_url, 6000)
+    cand["assignment"]["transcript"] = transcript or "[No transcript available]"
+
+    raw = await ask_claude(
+        """Analyze this Loom video assignment for an AI Engineer candidate.
+Video analysis is not available — this is based on transcript/content only.
+Return ONLY valid JSON:
+{
+  "content_score": 0,
+  "confidence_score": 0,
+  "verdict": "Strong Hire|Hire|Maybe|Reject",
+  "dimensions": [
+    {"name": "Technical Execution", "score": 0, "note": ""},
+    {"name": "Agent Quality", "score": 0, "note": ""},
+    {"name": "Communication", "score": 0, "note": ""},
+    {"name": "Problem Choice", "score": 0, "note": ""},
+    {"name": "Code Quality", "score": 0, "note": ""}
+  ],
+  "what_they_built": "",
+  "summary": "",
+  "human_review_notes": "VIDEO REVIEW REQUIRED — AI analysis based on transcript only"
+}""",
+        f"Candidate: {cand['name']}\nResume score: {cand.get('score',0)}/100\n\nTranscript:\n{cand['assignment']['transcript']}"
+    )
+    try:
+        result = json.loads(raw.replace("```json", "").replace("```", "").strip())
+        cand["assignment"]["score"] = result
+        cand["assignment"]["confidence"] = result.get("confidence_score", 0)
+
+        r  = cand.get("score", 0)
+        ph = (cand["phone_interview"].get("score") or {}).get("overall_score", 0)
+        lo = result.get("content_score", 0)
+        co = result.get("confidence_score", 0)
+        final = int(r * 0.30 + ph * 0.35 + lo * 0.25 + co * 0.10)
+
+        cand["final_score"]   = final
+        cand["final_verdict"] = result.get("verdict", "")
+        cand["stage"]         = "ready_for_review"
+        add_event(cid, f"Loom analyzed — {lo}/100 — Final: {final}/100", lo)
+        await _notify_reviewer(cid)
+    except Exception as e:
+        add_event(cid, f"Loom error: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════
+# EMAIL
+# ══════════════════════════════════════════════════════════════════
+
+async def _send_email(to: str, subject: str, body: str):
+    if not to:
+        return
+    try:
+        await ask_claude(
+            f"You are {AI_EMAIL}. Send emails using Gmail.",
+            f"Send this email:\nTo: {to}\nSubject: {subject}\nBody:\n{body}\n\nConfirm sent.",
+            max_tokens=200, mcp_servers=[GMAIL_MCP]
+        )
+    except Exception as e:
+        print(f"Email error: {e}")
+
+
+async def _send_rejection(cid: str, stage: str):
+    cand = candidates_db.get(cid)
+    if not cand or not cand.get("email"):
+        return
+    await _send_email(
+        cand["email"],
+        "Click Theory Capital — Application Update",
+        f"Hi {cand['name']},\n\nThank you for your time interviewing with Click Theory Capital.\n\nAfter careful consideration we have decided to move forward with other candidates at this time.\n\nWe appreciate your interest and will keep your profile on file.\n\nBest,\nAlex — Click Theory Capital Recruiting"
+    )
+    candidates_db[cid]["stage"] = f"rejected_{stage}"
+    add_event(cid, f"Rejection sent after {stage}")
+
+
+async def _notify_reviewer(cid: str):
+    cand = candidates_db.get(cid)
+    if not cand:
+        return
+    asgn = cand.get("assignment", {})
+    sc   = asgn.get("score", {}) or {}
+    body = f"""CANDIDATE READY FOR REVIEW
+{'='*40}
+Name:  {cand['name']}
+Email: {cand['email']}
+
+SCORES
+  Resume:     {cand.get('score',0)}/100
+  Phone:      {(cand['phone_interview'].get('score') or {}).get('overall_score','—')}/100
+  Loom:       {sc.get('content_score','—')}/100
+  Confidence: {asgn.get('confidence','—')}%
+  FINAL:      {cand.get('final_score','—')}/100
+
+Verdict: {cand.get('final_verdict','')}
+Built:   {sc.get('what_they_built','')}
+Summary: {sc.get('summary','')}
+
+NOTE: {sc.get('human_review_notes','Video review required')}
+
+Loom:      {asgn.get('loom_url','')}
+Dashboard: {APP_URL}
+"""
+    await _send_email(REVIEWER_EMAIL,
+        f"[REVIEW] {cand['name']} — Final: {cand.get('final_score','?')}/100 — {cand.get('final_verdict','')}",
+        body)
+    add_event(cid, "Reviewer notified by email")
+
+
+# ══════════════════════════════════════════════════════════════════
+# INBOX CHECK
+# ══════════════════════════════════════════════════════════════════
+
+@app.post("/api/check-inbox")
+async def check_inbox(background_tasks: BackgroundTasks):
+    try:
+        response = await ask_claude(
+            f"You have access to Gmail for {AI_EMAIL}.",
+            "Search the inbox for emails containing a Loom video URL (loom.com/share). Return JSON array: [{\"from\":\"email\",\"loom_url\":\"url\"}]. Return [] if none found.",
+            max_tokens=500, mcp_servers=[GMAIL_MCP]
+        )
+        match = re.search(r"\[.*?\]", response, re.DOTALL)
+        submissions = json.loads(match.group(0)) if match else []
+        processed = []
+        for sub in submissions:
+            sender   = sub.get("from", "")
+            loom_url = sub.get("loom_url", "")
+            if not loom_url:
+                continue
+            for cid, cand in candidates_db.items():
+                if cand.get("email", "").lower() == sender.lower():
+                    cand["assignment"]["loom_url"] = loom_url
+                    cand["stage"] = "loom_submitted"
+                    add_event(cid, f"Loom found in inbox: {loom_url}")
+                    background_tasks.add_task(_analyze_loom, cid, loom_url)
+                    processed.append(cid)
+        return JSONResponse({"found": len(submissions), "processed": processed})
+    except Exception as e:
+        return JSONResponse({"found": 0, "error": str(e)})
+
+
+# ══════════════════════════════════════════════════════════════════
+# HUMAN DECISION
+# ══════════════════════════════════════════════════════════════════
+
+@app.post("/api/pipeline/decision")
+async def human_decision(request: Request):
+    body     = await request.json()
+    cid      = body.get("candidate_id", "")
+    decision = body.get("decision", "")
+    cand     = candidates_db.get(cid)
+    if not cand:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    cand["human_decision"] = decision
+    cand["human_notes"]    = body.get("notes", "")
+    cand["stage"]          = "hired" if decision == "hire" else "passed"
+    add_event(cid, f"Human decision: {decision.upper()}")
+    if decision == "hire":
+        await _send_email(cand["email"],
+            "Offer — Click Theory Capital",
+            f"Hi {cand['name']},\n\nWe are thrilled to extend you an offer for the {settings_db['role']} role at Click Theory Capital!\n\nSomeone will reach out within 24 hours to discuss next steps.\n\nWelcome!\nThe Click Theory Capital Team")
+    return JSONResponse({"status": "ok", "stage": cand["stage"]})
+
+
+# ══════════════════════════════════════════════════════════════════
+# CANDIDATE CRUD
+# ══════════════════════════════════════════════════════════════════
+
+@app.get("/api/candidates")
+async def get_candidates():
+    return JSONResponse(list(candidates_db.values()))
+
+@app.get("/api/candidate/{cid}")
+async def get_candidate(cid: str):
+    c = candidates_db.get(cid)
+    return JSONResponse(c if c else {"error": "not found"})
+
+@app.delete("/api/candidate/{cid}")
+async def delete_candidate(cid: str):
+    candidates_db.pop(cid, None)
+    return JSONResponse({"ok": True})
+
+
+# ══════════════════════════════════════════════════════════════════
+# TEST ENDPOINTS
+# ══════════════════════════════════════════════════════════════════
+
+@app.get("/api/test/gmail")
+async def test_gmail():
+    try:
+        result = await ask_claude(
+            f"You have Gmail access for {AI_EMAIL}.",
+            "List subjects of the 3 most recent inbox emails as JSON array of strings.",
+            max_tokens=300, mcp_servers=[GMAIL_MCP]
+        )
+        return JSONResponse({"ok": True, "result": result})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)})
+
+@app.get("/api/test/calendar")
+async def test_calendar():
+    try:
+        result = await ask_claude(
+            f"You have Google Calendar access for {AI_EMAIL}.",
+            "List events in the next 7 days as a short JSON summary.",
+            max_tokens=300, mcp_servers=[GCAL_MCP]
+        )
+        return JSONResponse({"ok": True, "result": result})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)})
+
+
+# ══════════════════════════════════════════════════════════════════
+# SERVE
+# ══════════════════════════════════════════════════════════════════
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+@app.get("/")
+async def root():
+    return FileResponse("static/index.html")
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "candidates": len(candidates_db), "model": MODEL}
