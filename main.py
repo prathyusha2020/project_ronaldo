@@ -24,6 +24,32 @@ AI_EMAIL       = "prathyusha.hyra@gmail.com"
 APP_URL        = os.getenv("APP_URL", "http://localhost:8002")
 MODEL          = "claude-sonnet-4-20250514"
 
+# Google OAuth — token is obtained via /api/auth/gmail/callback
+# Set GOOGLE_OAUTH_TOKEN in Railway env vars after first OAuth flow
+GOOGLE_CLIENT_ID     = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+# Token store — persisted in env or updated at runtime
+google_token_store = {
+    "access_token":  os.getenv("GOOGLE_ACCESS_TOKEN", ""),
+    "refresh_token": os.getenv("GOOGLE_REFRESH_TOKEN", ""),
+    "expires_at":    0
+}
+
+def get_gmail_mcp():
+    """Build Gmail MCP server config with current access token"""
+    token = google_token_store.get("access_token", "")
+    cfg = {"type": "url", "url": "https://gmailmcp.googleapis.com/mcp/v1", "name": "gmail-mcp"}
+    if token:
+        cfg["authorization_token"] = token
+    return cfg
+
+def get_gcal_mcp():
+    token = google_token_store.get("access_token", "")
+    cfg = {"type": "url", "url": "https://calendarmcp.googleapis.com/mcp/v1", "name": "gcal-mcp"}
+    if token:
+        cfg["authorization_token"] = token
+    return cfg
+
 HEADERS = {
     "x-api-key": ANTHROPIC_KEY,
     "anthropic-version": "2023-06-01",
@@ -32,6 +58,7 @@ HEADERS = {
 HEADERS_MCP = {**HEADERS, "anthropic-beta": "mcp-client-2025-04-04"}
 HEADERS_PDF = {**HEADERS, "anthropic-beta": "pdfs-2024-09-25"}
 
+# Legacy aliases — replaced by get_gmail_mcp() / get_gcal_mcp() at call time
 GMAIL_MCP = {"type": "url", "url": "https://gmailmcp.googleapis.com/mcp/v1", "name": "gmail-mcp"}
 GCAL_MCP  = {"type": "url", "url": "https://calendarmcp.googleapis.com/mcp/v1", "name": "gcal-mcp"}
 
@@ -94,7 +121,7 @@ Return a JSON array only, no other text:
 [{"from": "candidate@email.com", "loom_url": "https://www.loom.com/share/abc123"}]
 
 If no Loom links found, return: []""",
-                    max_tokens=800, mcp_servers=[GMAIL_MCP]
+                    max_tokens=800, mcp_servers=[get_gmail_mcp()]
                 )
                 import re as _re
                 match = _re.search(r"\[.*?\]", response, _re.DOTALL)
@@ -122,8 +149,203 @@ If no Loom links found, return: []""",
 async def startup():
     asyncio.create_task(_poll_active_calls())
     asyncio.create_task(_poll_inbox_for_looms())
+    asyncio.create_task(_refresh_google_token_loop())
     print("[STARTUP] VAPI call poller started (every 30s)")
     print("[STARTUP] Inbox Loom poller started (every 5 min)")
+    tok = google_token_store.get("access_token","")
+    print(f"[STARTUP] Google OAuth token: {'✓ present ('+tok[:12]+'...)' if tok else '✗ MISSING — go to /api/auth/gmail'}")
+
+
+# ══════════════════════════════════════════════════════════════════
+# GOOGLE OAUTH + DIRECT GMAIL API
+# ══════════════════════════════════════════════════════════════════
+
+async def _refresh_google_token_loop():
+    """Refresh Google access token every 50 minutes using refresh_token"""
+    while True:
+        await asyncio.sleep(3000)  # 50 min
+        await _refresh_google_token()
+
+async def _refresh_google_token():
+    rt = google_token_store.get("refresh_token","")
+    if not rt or not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.post("https://oauth2.googleapis.com/token", data={
+                "grant_type": "refresh_token",
+                "refresh_token": rt,
+                "client_id": GOOGLE_CLIENT_ID,
+                "client_secret": GOOGLE_CLIENT_SECRET,
+            })
+        d = r.json()
+        if "access_token" in d:
+            google_token_store["access_token"] = d["access_token"]
+            print(f"[OAUTH] Token refreshed — new token: {d['access_token'][:16]}...")
+        else:
+            print(f"[OAUTH] Refresh failed: {d}")
+    except Exception as e:
+        print(f"[OAUTH] Refresh error: {e}")
+
+@app.get("/api/auth/gmail")
+async def gmail_auth_start():
+    """Redirect to Google OAuth consent screen"""
+    if not GOOGLE_CLIENT_ID:
+        return HTMLResponse("""<h2>Missing GOOGLE_CLIENT_ID</h2>
+<p>Add these to Railway environment variables:</p>
+<pre>GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+GOOGLE_REFRESH_TOKEN=...  (from OAuth Playground)</pre>
+<p>See instructions at <a href="https://developers.google.com/oauthplayground">OAuth Playground</a></p>""")
+    scopes = "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly"
+    redirect = f"{APP_URL}/api/auth/gmail/callback"
+    url = (f"https://accounts.google.com/o/oauth2/v2/auth"
+           f"?client_id={GOOGLE_CLIENT_ID}"
+           f"&redirect_uri={redirect}"
+           f"&response_type=code"
+           f"&scope={scopes}"
+           f"&access_type=offline"
+           f"&prompt=consent")
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url)
+
+@app.get("/api/auth/gmail/callback")
+async def gmail_auth_callback(code: str = "", error: str = ""):
+    if error:
+        return HTMLResponse(f"<h2>OAuth Error: {error}</h2>")
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.post("https://oauth2.googleapis.com/token", data={
+                "code": code,
+                "client_id": GOOGLE_CLIENT_ID,
+                "client_secret": GOOGLE_CLIENT_SECRET,
+                "redirect_uri": f"{APP_URL}/api/auth/gmail/callback",
+                "grant_type": "authorization_code",
+            })
+        d = r.json()
+        if "access_token" in d:
+            google_token_store["access_token"] = d["access_token"]
+            if "refresh_token" in d:
+                google_token_store["refresh_token"] = d["refresh_token"]
+            return HTMLResponse(f"""<h2 style='color:green'>✓ Gmail Connected!</h2>
+<p>Access token obtained. Add these to Railway environment variables to persist:</p>
+<pre>GOOGLE_ACCESS_TOKEN={d['access_token']}
+GOOGLE_REFRESH_TOKEN={d.get('refresh_token','(same as before)')}
+</pre>
+<p><a href="/">← Back to dashboard</a></p>""")
+        return HTMLResponse(f"<h2>Error: {d}</h2>")
+    except Exception as e:
+        return HTMLResponse(f"<h2>Error: {e}</h2>")
+
+@app.get("/api/auth/status")
+async def auth_status():
+    tok = google_token_store.get("access_token","")
+    return JSONResponse({
+        "gmail_connected": bool(tok),
+        "token_preview": tok[:16]+"..." if tok else None,
+        "has_refresh_token": bool(google_token_store.get("refresh_token","")),
+        "has_client_id": bool(GOOGLE_CLIENT_ID),
+    })
+
+@app.post("/api/auth/token")
+async def set_token_manual(request: Request):
+    """Manually set Google OAuth token — POST {access_token, refresh_token}"""
+    body = await request.json()
+    if body.get("access_token"):
+        google_token_store["access_token"] = body["access_token"]
+    if body.get("refresh_token"):
+        google_token_store["refresh_token"] = body["refresh_token"]
+    return JSONResponse({"ok": True, "token_set": bool(google_token_store.get("access_token"))})
+
+
+async def _gmail_send_direct(to: str, subject: str, body: str) -> dict:
+    """
+    Send email via Gmail REST API directly — no MCP, no Claude.
+    Requires GOOGLE_ACCESS_TOKEN in environment.
+    Returns {"ok": True} or {"ok": False, "error": ...}
+    """
+    token = google_token_store.get("access_token","")
+    if not token:
+        return {"ok": False, "error": "No Google access token — connect Gmail at /api/auth/gmail"}
+
+    # Build RFC 2822 message
+    from email.mime.text import MIMEText
+    msg = MIMEText(body, "plain")
+    msg["To"] = to
+    msg["From"] = AI_EMAIL
+    msg["Subject"] = subject
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(
+                "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                json={"raw": raw}
+            )
+        d = r.json()
+        if r.status_code == 200:
+            print(f"[GMAIL DIRECT] ✓ Sent to {to} | msgId={d.get('id','')}")
+            return {"ok": True, "id": d.get("id")}
+        elif r.status_code == 401:
+            # Token expired — try refresh
+            await _refresh_google_token()
+            token2 = google_token_store.get("access_token","")
+            if token2 != token:
+                async with httpx.AsyncClient(timeout=30) as client:
+                    r2 = await client.post(
+                        "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+                        headers={"Authorization": f"Bearer {token2}", "Content-Type": "application/json"},
+                        json={"raw": raw}
+                    )
+                d2 = r2.json()
+                if r2.status_code == 200:
+                    return {"ok": True, "id": d2.get("id")}
+            return {"ok": False, "error": f"Auth error {r.status_code}: {d}"}
+        else:
+            print(f"[GMAIL DIRECT] ✗ {r.status_code}: {d}")
+            return {"ok": False, "error": f"{r.status_code}: {d.get('error',{}).get('message',str(d))}"}
+    except Exception as e:
+        print(f"[GMAIL DIRECT] Exception: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+async def _gmail_read_recent(n: int = 5) -> list:
+    """Read last n emails from Gmail inbox via REST API directly"""
+    token = google_token_store.get("access_token","")
+    if not token:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            # List messages
+            r = await client.get(
+                f"https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults={n}&labelIds=INBOX",
+                headers={"Authorization": f"Bearer {token}"}
+            )
+            if r.status_code == 401:
+                await _refresh_google_token()
+                token = google_token_store.get("access_token","")
+                r = await client.get(
+                    f"https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults={n}&labelIds=INBOX",
+                    headers={"Authorization": f"Bearer {token}"}
+                )
+            msgs = r.json().get("messages", [])
+            emails = []
+            for m in msgs[:n]:
+                r2 = await client.get(
+                    f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{m['id']}?format=metadata&metadataHeaders=From&metadataHeaders=Subject",
+                    headers={"Authorization": f"Bearer {token}"}
+                )
+                md = r2.json()
+                headers_list = md.get("payload",{}).get("headers",[])
+                from_h = next((h["value"] for h in headers_list if h["name"]=="From"), "")
+                subj_h = next((h["value"] for h in headers_list if h["name"]=="Subject"), "")
+                snippet = md.get("snippet","")
+                emails.append({"from": from_h, "subject": subj_h, "snippet": snippet, "id": m["id"]})
+        return emails
+    except Exception as e:
+        print(f"[GMAIL READ] Error: {e}")
+        return []
 settings_db = {
     "company": "Click Theory Capital",
     "role": "AI/ML Engineer",
@@ -1046,27 +1268,13 @@ The Click Theory Capital Team""")
 # ══════════════════════════════════════════════════════════════════
 
 async def _send_email(to: str, subject: str, body: str):
+    """Send email via Gmail REST API directly — no MCP required"""
     if not to:
         print(f"[EMAIL] Skipped — no recipient address")
         return
-    try:
-        system = (
-            f"You are an automated email assistant for {AI_EMAIL} at Click Theory Capital. "
-            f"Your ONLY job is to send emails using the Gmail tool. "
-            f"Always call the Gmail send tool immediately with the exact details provided. "
-            f"Do not ask for confirmation. Do not modify the content."
-        )
-        prompt = (
-            f"Send an email RIGHT NOW using the Gmail send tool with exactly these details:\n\n"
-            f"To: {to}\n"
-            f"Subject: {subject}\n"
-            f"Body:\n{body}\n\n"
-            f"Call the Gmail send tool now."
-        )
-        result = await ask_claude(system, prompt, max_tokens=500, mcp_servers=[GMAIL_MCP])
-        print(f"[EMAIL] ✓ Sent to {to} | Subject: {subject[:60]} | MCP result: {result[:120]}")
-    except Exception as e:
-        print(f"[EMAIL] ✗ Error sending to {to}: {e}")
+    result = await _gmail_send_direct(to, subject, body)
+    if not result["ok"]:
+        print(f"[EMAIL] ✗ Failed to send to {to}: {result.get('error','unknown')}")
 
 
 async def _send_rejection(cid: str, stage: str):
@@ -1154,53 +1362,49 @@ Dashboard: {APP_URL}
 
 @app.post("/api/check-inbox")
 async def check_inbox(background_tasks: BackgroundTasks):
-    """Read last 5 emails in Gmail and find Loom links from candidates"""
+    """Read last 5 emails via Gmail REST API directly and find Loom links"""
+    token = google_token_store.get("access_token","")
+    if not token:
+        return JSONResponse({"emails_read": 0, "error": "Gmail not connected — go to /api/auth/gmail to connect"})
     try:
-        response = await ask_claude(
-            f"You are monitoring the Gmail inbox for {AI_EMAIL} as part of an AI hiring system. "
-            f"Use the Gmail tool to read the inbox.",
-            """Use the Gmail search/list tool to fetch the 5 most recent emails in the inbox.
-For each email, check if it contains a loom.com/share link.
-
-Return ONLY a JSON array with this structure (no other text):
-[
-  {{"from": "sender@email.com", "subject": "email subject", "loom_url": "https://www.loom.com/share/abc123", "snippet": "short preview"}}
-]
-
-If an email has no Loom link, still include it with loom_url as null.
-If inbox is empty, return: []""",
-            max_tokens=1500, mcp_servers=[GMAIL_MCP]
-        )
-        print(f"[INBOX CHECK] Raw response: {response[:400]}")
-
-        # Parse JSON from response
-        import re as _re
-        match = _re.search(r"\[.*?\]", response, _re.DOTALL)
-        emails = json.loads(match.group(0)) if match else []
+        emails = await _gmail_read_recent(5)
+        print(f"[INBOX CHECK] Read {len(emails)} emails")
+        for e in emails:
+            print(f"  from={e['from']} subj={e['subject'][:50]} snippet={e['snippet'][:60]}")
 
         processed = []
         all_cand_emails = {c.get("email","").lower(): cid
                            for cid, c in candidates_db.items() if c.get("email")}
 
         for email_item in emails:
-            loom_url = email_item.get("loom_url")
-            sender   = email_item.get("from", "").lower()
-            # Strip angle brackets if present e.g. "Name <email@x.com>"
-            sender_clean = _re.search(r'[\w.+-]+@[\w.-]+', sender)
+            sender = email_item.get("from","").lower()
+            snippet = email_item.get("snippet","")
+            subj = email_item.get("subject","")
+            combined_text = f"{subj} {snippet}"
+
+            # Extract loom URL from snippet/subject
+            loom_match = re.search(r'https?://(?:www\.)?loom\.com/share/[\w]+', combined_text)
+            loom_url = loom_match.group(0) if loom_match else None
+
+            # Extract sender email
+            sender_clean = re.search(r'[\w.+%-]+@[\w.-]+\.[a-zA-Z]{2,}', sender)
             sender_email = sender_clean.group(0).lower() if sender_clean else sender
 
-            if loom_url and "loom.com" in loom_url:
+            email_item["loom_url"] = loom_url
+
+            if loom_url:
                 cid = all_cand_emails.get(sender_email)
                 if cid and cid in candidates_db:
                     cand = candidates_db[cid]
-                    if not cand.get("assignment", {}).get("loom_url"):
+                    if not cand.get("assignment",{}).get("loom_url"):
                         cand["assignment"]["loom_url"] = loom_url
                         cand["stage"] = "loom_submitted"
                         add_event(cid, f"Loom found in inbox from {sender_email}: {loom_url}")
                         background_tasks.add_task(_analyze_loom, cid, loom_url)
                         processed.append({"cid": cid, "name": cand["name"], "loom_url": loom_url})
+                        print(f"[INBOX] ✓ Matched Loom to candidate {cand['name']}")
                 else:
-                    print(f"[INBOX] Loom found from {sender_email} but no matching candidate")
+                    print(f"[INBOX] Loom found from {sender_email} but no matching candidate in DB")
 
         return JSONResponse({
             "emails_read": len(emails),
@@ -1297,75 +1501,15 @@ async def save_email_templates(request: Request):
 
 @app.post("/api/email/send")
 async def send_email_direct(request: Request):
-    """Direct email send with full agentic loop debug output"""
+    """Send email directly via Gmail REST API — no MCP"""
     body    = await request.json()
     to      = body.get("to", "")
     subject = body.get("subject", "")
     msg     = body.get("body", "")
     if not to or not subject:
         return JSONResponse({"ok": False, "error": "missing to/subject"}, status_code=400)
-    try:
-        system = (
-            f"You are an automated email assistant for {AI_EMAIL} at Click Theory Capital. "
-            f"Your ONLY job is to send the email using the Gmail send tool. "
-            f"Call the Gmail send tool immediately with the exact details provided."
-        )
-        prompt = (
-            f"Send this email using Gmail:\n\nTo: {to}\nSubject: {subject}\nBody:\n{msg}"
-        )
-        payload = {
-            "model": MODEL,
-            "max_tokens": 800,
-            "system": system,
-            "messages": [{"role": "user", "content": prompt}],
-            "mcp_servers": [GMAIL_MCP]
-        }
-        all_tools_called = []
-        all_text = []
-        tool_results_received = []
-
-        async with httpx.AsyncClient(timeout=120) as client:
-            for turn in range(8):
-                resp = await client.post("https://api.anthropic.com/v1/messages",
-                                         headers=HEADERS_MCP, json=payload)
-                data = resp.json()
-                stop_reason = data.get("stop_reason", "")
-                content = data.get("content", [])
-
-                print(f"[EMAIL DEBUG] Turn {turn+1} stop={stop_reason} blocks={len(content)}")
-                for b in content:
-                    btype = b.get("type","")
-                    print(f"  block: {btype} name={b.get('name','')} id={b.get('id','')[:12] if b.get('id') else ''}")
-                    if btype == "text":
-                        all_text.append(b.get("text",""))
-                    elif btype == "tool_use":
-                        all_tools_called.append({"name": b.get("name",""), "input": b.get("input",{})})
-                    elif btype == "mcp_tool_result":
-                        for inner in b.get("content",[]):
-                            if inner.get("type") == "text":
-                                tool_results_received.append(inner.get("text",""))
-
-                if stop_reason == "end_turn" or not any(b.get("type") == "tool_use" for b in content):
-                    break
-
-                payload["messages"].append({"role": "assistant", "content": content})
-                tool_results = [{"type": "tool_result", "tool_use_id": b["id"], "content": "ok"}
-                                for b in content if b.get("type") == "tool_use"]
-                payload["messages"].append({"role": "user", "content": tool_results})
-
-        success = len(all_tools_called) > 0
-        print(f"[EMAIL DEBUG] Done. Tools called: {[t['name'] for t in all_tools_called]}")
-        return JSONResponse({
-            "ok": success,
-            "sent_to": to,
-            "tools_called": all_tools_called,
-            "tool_results": tool_results_received,
-            "response_text": "\n".join(all_text),
-            "warning": "" if success else "No tools were called — Gmail MCP may not be connected or authorized"
-        })
-    except Exception as e:
-        print(f"[EMAIL DIRECT] Error: {e}")
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    result = await _gmail_send_direct(to, subject, msg)
+    return JSONResponse({**result, "sent_to": to})
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1383,7 +1527,7 @@ async def test_send_email(request: Request):
         result = await ask_claude(
             f"You are the AI recruiting system for Click Theory Capital using Gmail account {AI_EMAIL}. Send emails exactly as instructed. Call the Gmail send tool immediately.",
             f"Send this email NOW using Gmail:\n\nTo: {to}\nSubject: {subject}\n\nBody:\n{msg}\n\nCall the Gmail send tool now.",
-            max_tokens=400, mcp_servers=[GMAIL_MCP]
+            max_tokens=400, mcp_servers=[get_gmail_mcp()]
         )
         print(f"[EMAIL TEST] Sent to {to} | Result: {result[:100]}")
         return JSONResponse({"ok": True, "sent_to": to, "result": result[:300]})
@@ -1398,7 +1542,7 @@ async def test_gmail():
         result = await ask_claude(
             f"You have Gmail access for {AI_EMAIL}.",
             "List subjects of the 3 most recent inbox emails as JSON array of strings.",
-            max_tokens=300, mcp_servers=[GMAIL_MCP]
+            max_tokens=300, mcp_servers=[get_gmail_mcp()]
         )
         return JSONResponse({"ok": True, "result": result})
     except Exception as e:
@@ -1410,7 +1554,7 @@ async def test_calendar():
         result = await ask_claude(
             f"You have Google Calendar access for {AI_EMAIL}.",
             "List events in the next 7 days as a short JSON summary.",
-            max_tokens=300, mcp_servers=[GCAL_MCP]
+            max_tokens=300, mcp_servers=[get_gcal_mcp()]
         )
         return JSONResponse({"ok": True, "result": result})
     except Exception as e:
