@@ -95,7 +95,7 @@ textarea{resize:vertical;line-height:1.6;font-family:'JetBrains Mono',monospace;
 .kc-n{font-size:11px;font-weight:500;color:var(--tx);margin-bottom:2px;padding-right:26px}
 .kc-s{font-size:9px;color:var(--tx3);font-family:'JetBrains Mono',monospace}
 .kc-sc{position:absolute;top:.4rem;right:.5rem;font-size:11px;font-weight:700;font-family:'JetBrains Mono',monospace}
-.slide{position:fixed;right:0;top:48px;bottom:0;width:580px;background:var(--bg1);border-left:1px solid var(--bd2);z-index:40;transform:translateX(100%);transition:transform .22s cubic-bezier(.4,0,.2,1);display:flex;flex-direction:column}
+.slide{position:fixed;right:0;top:48px;bottom:0;width:640px;background:var(--bg1);border-left:1px solid var(--bd2);z-index:40;transform:translateX(100%);transition:transform .22s cubic-bezier(.4,0,.2,1);display:flex;flex-direction:column}
 .slide.on{transform:translateX(0)}
 .slide-head{padding:1.1rem 1.25rem;border-bottom:1px solid var(--bd2);flex-shrink:0;display:flex;align-items:flex-start;gap:.75rem}
 .slide-x{background:none;border:none;color:var(--tx3);font-size:16px;cursor:pointer;padding:.25rem;margin-left:auto;line-height:1;flex-shrink:0}
@@ -191,6 +191,7 @@ textarea{resize:vertical;line-height:1.6;font-family:'JetBrains Mono',monospace;
   <div class="sb-div"></div>
   <div class="sb-group">Tools</div>
   <div class="nav" onclick="gv('interview',this)"><span class="nav-ic">🎙</span>Video Interview Room</div>
+  <div class="nav" onclick="gv('templates',this);loadTemplates()"><span class="nav-ic">✉</span>Email Templates</div>
   <div class="nav" onclick="gv('integrations',this)"><span class="nav-ic">⊕</span>Integrations</div>
   <div class="sb-foot"><div class="sb-chip">prathyusha.hyra@gmail.com</div></div>
 </div>
@@ -342,6 +343,72 @@ textarea{resize:vertical;line-height:1.6;font-family:'JetBrains Mono',monospace;
         </div>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- EMAIL TEMPLATES -->
+<div class="view" id="v-templates">
+  <div class="vhead">
+    <div class="vhead-info">
+      <div class="vh-title">Email Templates</div>
+      <div class="vh-sub">Edit every email sent by the system · use {name}, {role}, {submit_url} as placeholders</div>
+    </div>
+    <div class="vhead-r">
+      <button class="btn btn-p" onclick="saveTemplates()">💾 Save All Templates</button>
+      <span id="tmpl-saved" style="font-size:11px;color:var(--grn);font-family:'JetBrains Mono',monospace;opacity:0;transition:opacity .3s"></span>
+    </div>
+  </div>
+  <div class="vbody">
+
+    <!-- Test email sender -->
+    <div class="card" style="border-color:var(--blu-bd)">
+      <div class="ctitle" style="color:var(--blu)">📬 Send Test Email</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.65rem;margin-bottom:.65rem">
+        <div class="field" style="margin:0"><label>To</label><input type="email" id="test-to" value="prathyusha.hyra@gmail.com" placeholder="recipient@email.com"/></div>
+        <div class="field" style="margin:0"><label>Subject</label><input type="text" id="test-subject" value="Test — Project Ronaldo Email Check"/></div>
+      </div>
+      <div class="field" style="margin-bottom:.65rem"><label>Body</label><textarea id="test-body" rows="3" style="font-family:'Inter',sans-serif;font-size:12px">Hi! This is a test email from Project Ronaldo to verify Gmail MCP is working correctly. If you receive this, emails are sending! ✓</textarea></div>
+      <div style="display:flex;gap:.5rem;align-items:center">
+        <button class="btn btn-p" onclick="sendTestEmail()">Send Test Email →</button>
+        <span id="test-result" style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--tx3)"></span>
+      </div>
+    </div>
+
+    <!-- Assignment email -->
+    <div class="card">
+      <div class="ctitle">📋 Assignment Email <span style="color:var(--tx3);font-weight:400;font-size:9px">(sent after passing phone interview)</span></div>
+      <div class="field"><label>Subject</label><input type="text" id="tmpl-assignment-subject"/></div>
+      <div class="field" style="margin:0"><label>Body</label><textarea id="tmpl-assignment-body" rows="10" style="font-family:'Inter',sans-serif;font-size:12px;line-height:1.65"></textarea></div>
+    </div>
+
+    <!-- Interview invite -->
+    <div class="card">
+      <div class="ctitle">🎥 Video Interview Invite <span style="color:var(--tx3);font-weight:400;font-size:9px">(sent after Loom reviewed — use {interview_url})</span></div>
+      <div class="field"><label>Subject</label><input type="text" id="tmpl-interview_invite-subject"/></div>
+      <div class="field" style="margin:0"><label>Body</label><textarea id="tmpl-interview_invite-body" rows="10" style="font-family:'Inter',sans-serif;font-size:12px;line-height:1.65"></textarea></div>
+    </div>
+
+    <!-- Offer email -->
+    <div class="card">
+      <div class="ctitle">🎉 Offer Email <span style="color:var(--tx3);font-weight:400;font-size:9px">(sent when human clicks Hire)</span></div>
+      <div class="field"><label>Subject</label><input type="text" id="tmpl-offer-subject"/></div>
+      <div class="field" style="margin:0"><label>Body</label><textarea id="tmpl-offer-body" rows="8" style="font-family:'Inter',sans-serif;font-size:12px;line-height:1.65"></textarea></div>
+    </div>
+
+    <!-- Rejection email -->
+    <div class="card">
+      <div class="ctitle">✗ Rejection Email <span style="color:var(--tx3);font-weight:400;font-size:9px">(sent when rejected or human clicks Reject)</span></div>
+      <div class="field"><label>Subject</label><input type="text" id="tmpl-rejection-subject"/></div>
+      <div class="field" style="margin:0"><label>Body</label><textarea id="tmpl-rejection-body" rows="8" style="font-family:'Inter',sans-serif;font-size:12px;line-height:1.65"></textarea></div>
+    </div>
+
+    <!-- Outreach email -->
+    <div class="card">
+      <div class="ctitle">📣 Outreach Email <span style="color:var(--tx3);font-weight:400;font-size:9px">(for proactive candidate outreach)</span></div>
+      <div class="field"><label>Subject</label><input type="text" id="tmpl-outreach-subject"/></div>
+      <div class="field" style="margin:0"><label>Body</label><textarea id="tmpl-outreach-body" rows="8" style="font-family:'Inter',sans-serif;font-size:12px;line-height:1.65"></textarea></div>
+    </div>
+
   </div>
 </div>
 
@@ -1164,6 +1231,60 @@ function b64toBlob(b64, mime) {
   var bytes = atob(b64); var ab = new ArrayBuffer(bytes.length); var ia = new Uint8Array(ab);
   for (var i=0;i<bytes.length;i++) ia[i]=bytes.charCodeAt(i);
   return new Blob([ab],{type:mime});
+}
+
+// ── EMAIL TEMPLATES ───────────────────────────────────────────────
+var tmplData = {};
+
+async function loadTemplates() {
+  try {
+    tmplData = await req('/api/email/templates');
+    var keys = ['assignment','interview_invite','offer','rejection','outreach'];
+    keys.forEach(function(k) {
+      var t = tmplData[k] || {};
+      var subEl = document.getElementById('tmpl-'+k+'-subject');
+      var bodEl = document.getElementById('tmpl-'+k+'-body');
+      if (subEl) subEl.value = t.subject || '';
+      if (bodEl) bodEl.value = t.body || '';
+    });
+  } catch(e) { console.error('loadTemplates error', e); }
+}
+
+async function saveTemplates() {
+  var keys = ['assignment','interview_invite','offer','rejection','outreach'];
+  var updates = {};
+  keys.forEach(function(k) {
+    var subEl = document.getElementById('tmpl-'+k+'-subject');
+    var bodEl = document.getElementById('tmpl-'+k+'-body');
+    if (subEl && bodEl) {
+      updates[k] = { subject: subEl.value, body: bodEl.value };
+    }
+  });
+  try {
+    await req('/api/email/templates', 'POST', updates);
+    var msg = document.getElementById('tmpl-saved');
+    if (msg) { msg.textContent = '✓ Saved'; msg.style.opacity = '1'; setTimeout(function(){ msg.style.opacity='0'; }, 2000); }
+  } catch(e) { alert('Save error: '+e.message); }
+}
+
+async function sendTestEmail() {
+  var to = document.getElementById('test-to').value.trim();
+  var subject = document.getElementById('test-subject').value.trim();
+  var body = document.getElementById('test-body').value.trim();
+  var resultEl = document.getElementById('test-result');
+  if (!to || !subject) { if(resultEl) resultEl.textContent = 'Fill in To and Subject'; return; }
+  if(resultEl) { resultEl.textContent = '⏳ Sending...'; resultEl.style.color = 'var(--tx3)'; }
+  try {
+    var r = await req('/api/email/send', 'POST', { to: to, subject: subject, body: body });
+    if (r.ok) {
+      var tools = (r.tools_called||[]).map(function(t){return t.name;}).join(', ');
+      if(resultEl) { resultEl.style.color='var(--grn)'; resultEl.textContent = '✓ Sent! Tools: '+tools; }
+    } else {
+      if(resultEl) { resultEl.style.color='var(--red)'; resultEl.textContent = '✗ Error: '+(r.error||'unknown'); }
+    }
+  } catch(e) {
+    if(resultEl) { resultEl.style.color='var(--red)'; resultEl.textContent = '✗ '+e.message; }
+  }
 }
 
 // ── INBOX ─────────────────────────────────────────────────────────
