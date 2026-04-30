@@ -142,6 +142,11 @@ settings_db = {
 # ══════════════════════════════════════════════════════════════════
 
 async def ask_claude(system: str, user: str, max_tokens: int = 2000, mcp_servers: list = None) -> str:
+    """
+    Calls Claude with an agentic loop when MCP servers are provided.
+    MCP requires multiple turns: Claude emits tool_use → we send tool_result → Claude responds.
+    Without the loop, Claude describes the action but never executes it.
+    """
     payload = {
         "model": MODEL,
         "max_tokens": max_tokens,
@@ -151,18 +156,54 @@ async def ask_claude(system: str, user: str, max_tokens: int = 2000, mcp_servers
     if mcp_servers:
         payload["mcp_servers"] = mcp_servers
     hdrs = HEADERS_MCP if mcp_servers else HEADERS
+
+    all_text_parts = []
+
     async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post("https://api.anthropic.com/v1/messages", headers=hdrs, json=payload)
-    data = resp.json()
-    parts = []
-    for block in data.get("content", []):
-        if block.get("type") == "text":
-            parts.append(block.get("text", ""))
-        elif block.get("type") == "mcp_tool_result":
-            for inner in block.get("content", []):
-                if inner.get("type") == "text":
-                    parts.append(inner.get("text", ""))
-    return "\n".join(p for p in parts if p)
+        for _turn in range(8):  # max 8 agentic turns
+            resp = await client.post("https://api.anthropic.com/v1/messages", headers=hdrs, json=payload)
+            data = resp.json()
+
+            if resp.status_code != 200:
+                print(f"[CLAUDE] API error {resp.status_code}: {data}")
+                break
+
+            stop_reason = data.get("stop_reason", "")
+            content     = data.get("content", [])
+
+            # Collect text from this turn
+            for block in content:
+                if block.get("type") == "text" and block.get("text"):
+                    all_text_parts.append(block["text"])
+                elif block.get("type") == "mcp_tool_result":
+                    for inner in block.get("content", []):
+                        if inner.get("type") == "text" and inner.get("text"):
+                            all_text_parts.append(inner["text"])
+
+            # If stop_reason is end_turn or no tool use, we're done
+            if stop_reason == "end_turn":
+                break
+
+            # Check if Claude wants to use tools
+            tool_use_blocks = [b for b in content if b.get("type") == "tool_use"]
+            if not tool_use_blocks:
+                break  # No tools to call, done
+
+            # Build tool results — for MCP the results come back in the next assistant message
+            # We append the assistant message and a user message with tool results
+            payload["messages"].append({"role": "assistant", "content": content})
+
+            tool_results = []
+            for tb in tool_use_blocks:
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tb.get("id", ""),
+                    "content": "Tool executed successfully"
+                })
+
+            payload["messages"].append({"role": "user", "content": tool_results})
+
+    return "\n".join(p for p in all_text_parts if p)
 
 
 @app.post("/api/stream")
@@ -1113,39 +1154,63 @@ Dashboard: {APP_URL}
 
 @app.post("/api/check-inbox")
 async def check_inbox(background_tasks: BackgroundTasks):
+    """Read last 5 emails in Gmail and find Loom links from candidates"""
     try:
         response = await ask_claude(
-            f"You are monitoring the Gmail inbox for {AI_EMAIL} as part of an AI hiring system.",
-            """Read the inbox and find any emails from candidates that contain a Loom video link (loom.com/share).
-For each such email, extract:
-- from: sender email address
-- loom_url: the full loom.com/share URL
+            f"You are monitoring the Gmail inbox for {AI_EMAIL} as part of an AI hiring system. "
+            f"Use the Gmail tool to read the inbox.",
+            """Use the Gmail search/list tool to fetch the 5 most recent emails in the inbox.
+For each email, check if it contains a loom.com/share link.
 
-Return a JSON array only, no other text:
-[{"from": "candidate@email.com", "loom_url": "https://www.loom.com/share/abc123"}]
+Return ONLY a JSON array with this structure (no other text):
+[
+  {{"from": "sender@email.com", "subject": "email subject", "loom_url": "https://www.loom.com/share/abc123", "snippet": "short preview"}}
+]
 
-If no Loom links found, return: []""",
-            max_tokens=800, mcp_servers=[GMAIL_MCP]
+If an email has no Loom link, still include it with loom_url as null.
+If inbox is empty, return: []""",
+            max_tokens=1500, mcp_servers=[GMAIL_MCP]
         )
-        print(f"[INBOX] Response: {response[:300]}")
-        match = re.search(r"\[.*?\]", response, re.DOTALL)
-        submissions = json.loads(match.group(0)) if match else []
+        print(f"[INBOX CHECK] Raw response: {response[:400]}")
+
+        # Parse JSON from response
+        import re as _re
+        match = _re.search(r"\[.*?\]", response, _re.DOTALL)
+        emails = json.loads(match.group(0)) if match else []
+
         processed = []
-        for sub in submissions:
-            sender   = sub.get("from", "")
-            loom_url = sub.get("loom_url", "")
-            if not loom_url:
-                continue
-            for cid, cand in candidates_db.items():
-                if cand.get("email", "").lower() == sender.lower():
-                    cand["assignment"]["loom_url"] = loom_url
-                    cand["stage"] = "loom_submitted"
-                    add_event(cid, f"Loom found in inbox: {loom_url}")
-                    background_tasks.add_task(_analyze_loom, cid, loom_url)
-                    processed.append(cid)
-        return JSONResponse({"found": len(submissions), "processed": processed})
+        all_cand_emails = {c.get("email","").lower(): cid
+                           for cid, c in candidates_db.items() if c.get("email")}
+
+        for email_item in emails:
+            loom_url = email_item.get("loom_url")
+            sender   = email_item.get("from", "").lower()
+            # Strip angle brackets if present e.g. "Name <email@x.com>"
+            sender_clean = _re.search(r'[\w.+-]+@[\w.-]+', sender)
+            sender_email = sender_clean.group(0).lower() if sender_clean else sender
+
+            if loom_url and "loom.com" in loom_url:
+                cid = all_cand_emails.get(sender_email)
+                if cid and cid in candidates_db:
+                    cand = candidates_db[cid]
+                    if not cand.get("assignment", {}).get("loom_url"):
+                        cand["assignment"]["loom_url"] = loom_url
+                        cand["stage"] = "loom_submitted"
+                        add_event(cid, f"Loom found in inbox from {sender_email}: {loom_url}")
+                        background_tasks.add_task(_analyze_loom, cid, loom_url)
+                        processed.append({"cid": cid, "name": cand["name"], "loom_url": loom_url})
+                else:
+                    print(f"[INBOX] Loom found from {sender_email} but no matching candidate")
+
+        return JSONResponse({
+            "emails_read": len(emails),
+            "loom_found": len([e for e in emails if e.get("loom_url")]),
+            "processed": processed,
+            "raw_emails": emails
+        })
     except Exception as e:
-        return JSONResponse({"found": 0, "error": str(e)})
+        print(f"[INBOX CHECK] Error: {e}")
+        return JSONResponse({"emails_read": 0, "error": str(e)})
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1232,7 +1297,7 @@ async def save_email_templates(request: Request):
 
 @app.post("/api/email/send")
 async def send_email_direct(request: Request):
-    """Direct email send with full debug output"""
+    """Direct email send with full agentic loop debug output"""
     body    = await request.json()
     to      = body.get("to", "")
     subject = body.get("subject", "")
@@ -1242,43 +1307,61 @@ async def send_email_direct(request: Request):
     try:
         system = (
             f"You are an automated email assistant for {AI_EMAIL} at Click Theory Capital. "
-            f"Your ONLY job is to send the email using Gmail. Call the send tool immediately."
+            f"Your ONLY job is to send the email using the Gmail send tool. "
+            f"Call the Gmail send tool immediately with the exact details provided."
         )
         prompt = (
-            f"Send this email NOW using Gmail:\n\nTo: {to}\nSubject: {subject}\nBody:\n{msg}\n\n"
-            f"Call the Gmail send tool immediately."
+            f"Send this email using Gmail:\n\nTo: {to}\nSubject: {subject}\nBody:\n{msg}"
         )
-        # Use raw httpx to capture the full MCP response for debugging
         payload = {
             "model": MODEL,
-            "max_tokens": 500,
+            "max_tokens": 800,
             "system": system,
             "messages": [{"role": "user", "content": prompt}],
             "mcp_servers": [GMAIL_MCP]
         }
+        all_tools_called = []
+        all_text = []
+        tool_results_received = []
+
         async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post("https://api.anthropic.com/v1/messages",
-                                     headers=HEADERS_MCP, json=payload)
-        data = resp.json()
-        # Extract all content blocks for full visibility
-        blocks = data.get("content", [])
-        text_parts = [b.get("text","") for b in blocks if b.get("type")=="text"]
-        tool_uses  = [{"name": b.get("name",""), "input": b.get("input",{})} for b in blocks if b.get("type")=="tool_use"]
-        tool_results = []
-        for b in blocks:
-            if b.get("type") == "mcp_tool_result":
-                for inner in b.get("content",[]):
-                    if inner.get("type") == "text":
-                        tool_results.append(inner.get("text",""))
-        full_text = "\n".join(text_parts)
-        print(f"[EMAIL DIRECT] to={to} | tools_called={[t['name'] for t in tool_uses]} | result={full_text[:150]}")
+            for turn in range(8):
+                resp = await client.post("https://api.anthropic.com/v1/messages",
+                                         headers=HEADERS_MCP, json=payload)
+                data = resp.json()
+                stop_reason = data.get("stop_reason", "")
+                content = data.get("content", [])
+
+                print(f"[EMAIL DEBUG] Turn {turn+1} stop={stop_reason} blocks={len(content)}")
+                for b in content:
+                    btype = b.get("type","")
+                    print(f"  block: {btype} name={b.get('name','')} id={b.get('id','')[:12] if b.get('id') else ''}")
+                    if btype == "text":
+                        all_text.append(b.get("text",""))
+                    elif btype == "tool_use":
+                        all_tools_called.append({"name": b.get("name",""), "input": b.get("input",{})})
+                    elif btype == "mcp_tool_result":
+                        for inner in b.get("content",[]):
+                            if inner.get("type") == "text":
+                                tool_results_received.append(inner.get("text",""))
+
+                if stop_reason == "end_turn" or not any(b.get("type") == "tool_use" for b in content):
+                    break
+
+                payload["messages"].append({"role": "assistant", "content": content})
+                tool_results = [{"type": "tool_result", "tool_use_id": b["id"], "content": "ok"}
+                                for b in content if b.get("type") == "tool_use"]
+                payload["messages"].append({"role": "user", "content": tool_results})
+
+        success = len(all_tools_called) > 0
+        print(f"[EMAIL DEBUG] Done. Tools called: {[t['name'] for t in all_tools_called]}")
         return JSONResponse({
-            "ok": True,
+            "ok": success,
             "sent_to": to,
-            "tools_called": tool_uses,
-            "tool_results": tool_results,
-            "response_text": full_text,
-            "raw_blocks": len(blocks)
+            "tools_called": all_tools_called,
+            "tool_results": tool_results_received,
+            "response_text": "\n".join(all_text),
+            "warning": "" if success else "No tools were called — Gmail MCP may not be connected or authorized"
         })
     except Exception as e:
         print(f"[EMAIL DIRECT] Error: {e}")
