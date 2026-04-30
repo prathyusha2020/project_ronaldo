@@ -329,7 +329,7 @@ textarea{resize:vertical;line-height:1.6;font-family:'JetBrains Mono',monospace;
       </div>
       <div class="iv-avatar" id="iv-avatar">A</div>
       <div class="iv-name-lbl">Alex</div>
-      <div class="iv-role-lbl" id="iv-role-lbl-txt">AI Technical Interviewer · Click Theory Capital</div>
+      <div class="iv-role-lbl" id="iv-role-lbl-txt">AI Technical Interviewer · Company AXZ</div>
       <div class="iv-question-box" id="iv-qbox">
         <div class="iv-q-label">Question <span id="iv-qnum">—</span> of <span id="iv-qtot">—</span></div>
         <div class="iv-q-text" id="iv-qtext">Click "Start Interview" to begin</div>
@@ -487,7 +487,7 @@ textarea{resize:vertical;line-height:1.6;font-family:'JetBrains Mono',monospace;
     <div class="card">
       <div class="ctitle">Company Branding</div>
       <div class="two">
-        <div class="field"><label>Company Name <span style="color:var(--tx3);font-weight:400">(shown in header and emails)</span></label><input type="text" id="s-company" placeholder="Click Theory Capital"/></div>
+        <div class="field"><label>Company Name <span style="color:var(--tx3);font-weight:400">(shown in header and emails)</span></label><input type="text" id="s-company" placeholder="Company AXZ"/></div>
         <div class="field"><label>Recruiter Name <span style="color:var(--tx3);font-weight:400">(AI interviewer name)</span></label><input type="text" id="s-recruiter" placeholder="Alex"/></div>
       </div>
       <div class="two">
@@ -1427,7 +1427,7 @@ function openEmailPopup(cid, type) {
     '</span> <span style="font-size:12px;color:var(--tx3);font-weight:400">to '+c.name+'</span>';
 
   document.getElementById('ep-to').value = c.email||'';
-  document.getElementById('ep-subject').value = fill(tmpl.subject) || (isOffer?'Offer — Click Theory Capital':'Application Update — Click Theory Capital');
+  document.getElementById('ep-subject').value = fill(tmpl.subject) || (isOffer?'Offer — Company AXZ':'Application Update — Company AXZ');
   document.getElementById('ep-body').value = fill(tmpl.body) || '';
   document.getElementById('ep-result').textContent = '';
 
@@ -1518,7 +1518,7 @@ function setupIVDone() {
     }
     if (ivMode === 'technical') {
       var roleLbl = document.getElementById('iv-role-lbl-txt');
-      if (roleLbl) roleLbl.textContent = 'Technical Interviewer · Drilling into your assignment · Click Theory Capital';
+      if (roleLbl) roleLbl.textContent = 'Technical Interviewer · Drilling into your assignment · Company AXZ';
     }
     if (d.context) {
       var el = document.getElementById('iv-status-txt');
