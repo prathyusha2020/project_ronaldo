@@ -706,7 +706,23 @@ function buildSlide(c) {
   h += '<button class="btn btn-sm btn-d" onclick="delCand(\''+c.id+'\')">Delete</button>';
   h += '</div>';
 
-  // ── Transcript paste section (shown when call placed but no score yet)
+  // ── Manual Loom submission (shown when in assignment_sent stage)
+  if (c.stage === 'assignment_sent' || c.stage === 'loom_submitted') {
+    var hasLoom = c.assignment && c.assignment.loom_url;
+    h += '<div style="background:var(--bg2);border:1px solid var(--cyn-bd);border-radius:9px;padding:1rem;margin-bottom:1rem">';
+    h += '<div style="font-size:10px;font-weight:700;color:var(--cyn);text-transform:uppercase;letter-spacing:.08em;font-family:\'JetBrains Mono\',monospace;margin-bottom:.6rem">🎬 Loom Submission</div>';
+    if (hasLoom) {
+      h += '<div style="font-size:12px;color:var(--grn);margin-bottom:.5rem">✓ Loom received: <a href="'+c.assignment.loom_url+'" target="_blank" style="color:var(--cyn)">'+c.assignment.loom_url+'</a></div>';
+    } else {
+      h += '<div style="font-size:12px;color:var(--tx3);margin-bottom:.65rem">Waiting for candidate to submit Loom. Paste the URL manually if they sent it directly:</div>';
+    }
+    h += '<div style="display:flex;gap:.5rem;align-items:center">';
+    h += '<input type="text" id="loom-url-'+c.id+'" placeholder="https://www.loom.com/share/..." style="flex:1;background:var(--bg3);border:1px solid var(--bd2);color:var(--tx);font-size:12px;padding:.5rem .75rem;border-radius:6px;outline:none;font-family:\'Inter\',sans-serif" value="'+(hasLoom?c.assignment.loom_url:'')+'">';
+    h += '<button class="btn btn-p" onclick="submitLoomManual(\''+c.id+'\')">Analyze →</button>';
+    h += '</div>';
+    h += '<div id="loom-result-'+c.id+'" style="margin-top:.4rem;font-size:11px;font-family:\'JetBrains Mono\',monospace;color:var(--tx3)"></div>';
+    h += '</div>';
+  }
   if (hasCall && !hasScore) {
     h += '<div style="background:var(--bg2);border:1px solid var(--amb-bd);border-radius:9px;padding:1rem;margin-bottom:1rem">';
     h += '<div style="font-size:10px;font-weight:700;color:var(--amb);text-transform:uppercase;letter-spacing:.08em;font-family:\'JetBrains Mono\',monospace;margin-bottom:.6rem">📋 Paste Call Transcript</div>';
@@ -1314,33 +1330,71 @@ async function sendTestEmail() {
   }
 }
 
-// ── INBOX ─────────────────────────────────────────────────────────
+async function submitLoomManual(cid) {
+  var input = document.getElementById('loom-url-'+cid);
+  var result = document.getElementById('loom-result-'+cid);
+  if (!input) return;
+  var url = input.value.trim();
+  if (!url || !url.includes('loom.com')) {
+    if(result) { result.style.color='var(--red)'; result.textContent='Enter a valid loom.com URL'; }
+    return;
+  }
+  if(result) { result.style.color='var(--tx3)'; result.textContent='⏳ Submitting Loom for analysis...'; }
+  try {
+    var r = await req('/api/candidate/'+cid+'/loom','POST',{loom_url: url});
+    if (r.ok) {
+      if(result) { result.style.color='var(--grn)'; result.textContent='✓ Loom received — analyzing now (~30s)...'; }
+      // Poll for analysis completion
+      var tries = 0;
+      var poll = setInterval(async function(){
+        tries++;
+        var c2 = await req('/api/candidate/'+cid);
+        cands[cid] = c2;
+        if (c2.assignment && c2.assignment.score) {
+          clearInterval(poll);
+          var sc = c2.assignment.score.content_score || 0;
+          if(result) { result.style.color='var(--grn)'; result.textContent='✓ Loom analyzed — Score: '+sc+'/100'; }
+          buildSlide(c2); renderDash(); updateBadges();
+        } else if (tries > 20) {
+          clearInterval(poll);
+          if(result) result.textContent = 'Analysis in progress — refresh to check';
+        }
+      }, 3000);
+    } else {
+      if(result) { result.style.color='var(--red)'; result.textContent='Error: '+(r.error||'unknown'); }
+    }
+  } catch(e) {
+    if(result) { result.style.color='var(--red)'; result.textContent='Error: '+e.message; }
+  }
+}
 async function checkInbox() {
   var btn=document.getElementById('inbox-btn');
   var msg=document.getElementById('inbox-msg');
   btn.disabled=true;
-  if(msg) msg.textContent='Reading last 5 emails...';
+  if(msg) msg.textContent='Reading inbox...';
   try {
     var r = await req('/api/check-inbox','POST');
     var txt = '';
     if (r.error) {
-      txt = '✗ Error: '+r.error;
+      txt = '✗ '+r.error;
     } else if (r.emails_read === 0) {
-      txt = 'Inbox empty or MCP not connected';
-    } else if (r.loom_found > 0 && r.processed && r.processed.length > 0) {
-      txt = '✓ '+r.emails_read+' emails read · '+r.processed.length+' Loom(s) found → processing';
-    } else if (r.loom_found > 0) {
-      txt = r.emails_read+' emails read · Loom found but no matching candidate';
+      txt = 'No emails found';
+    } else if (r.processed && r.processed.length > 0) {
+      txt = '✓ '+r.emails_read+' emails · Loom found for: '+r.processed.map(function(p){return p.name;}).join(', ')+' → analyzing';
+      await refreshAll();
     } else {
-      txt = r.emails_read+' emails read · No Loom links found';
+      txt = r.emails_read+' emails read · No Loom links matched any candidate';
+      if (r.raw_emails && r.raw_emails.length) {
+        console.log('[INBOX] Emails read:');
+        r.raw_emails.forEach(function(e){ console.log('  from='+e.from+' | loom='+e.loom_url+' | preview='+e.body_preview); });
+      }
     }
     if(msg) { msg.textContent = txt; }
-    if (r.processed && r.processed.length) await refreshAll();
   } catch(e) {
     if(msg) msg.textContent = '✗ '+e.message;
   }
   btn.disabled=false;
-  setTimeout(function(){ if(msg) msg.textContent=''; }, 6000);
+  setTimeout(function(){ if(msg) msg.textContent=''; }, 8000);
 }
 
 // ── UTILS ─────────────────────────────────────────────────────────
