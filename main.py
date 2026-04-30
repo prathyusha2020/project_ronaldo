@@ -310,42 +310,93 @@ async def _gmail_send_direct(to: str, subject: str, body: str) -> dict:
         return {"ok": False, "error": str(e)}
 
 
-async def _gmail_read_recent(n: int = 5) -> list:
-    """Read last n emails from Gmail inbox via REST API directly"""
+async def _gmail_read_recent(n: int = 10) -> list:
+    """Read last n emails from Gmail inbox via REST API — fetches full body to find Loom URLs"""
     token = google_token_store.get("access_token","")
     if not token:
         return []
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            # List messages
+        async with httpx.AsyncClient(timeout=45) as client:
+            # List messages — search broader: inbox + sent last 7 days
             r = await client.get(
-                f"https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults={n}&labelIds=INBOX",
+                f"https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults={n}&q=in:inbox loom.com",
                 headers={"Authorization": f"Bearer {token}"}
             )
             if r.status_code == 401:
                 await _refresh_google_token()
                 token = google_token_store.get("access_token","")
                 r = await client.get(
-                    f"https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults={n}&labelIds=INBOX",
+                    f"https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults={n}&q=in:inbox loom.com",
                     headers={"Authorization": f"Bearer {token}"}
                 )
             msgs = r.json().get("messages", [])
+
+            # Also search without loom filter to get recent emails
+            r2 = await client.get(
+                f"https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults={n}&labelIds=INBOX",
+                headers={"Authorization": f"Bearer {token}"}
+            )
+            all_msgs = msgs + [m for m in r2.json().get("messages",[]) if m not in msgs]
+            seen_ids = set()
+            unique_msgs = []
+            for m in all_msgs:
+                if m["id"] not in seen_ids:
+                    seen_ids.add(m["id"])
+                    unique_msgs.append(m)
+
             emails = []
-            for m in msgs[:n]:
-                r2 = await client.get(
-                    f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{m['id']}?format=metadata&metadataHeaders=From&metadataHeaders=Subject",
+            for m in unique_msgs[:n]:
+                # Use format=full to get entire body including URLs
+                r3 = await client.get(
+                    f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{m['id']}?format=full",
                     headers={"Authorization": f"Bearer {token}"}
                 )
-                md = r2.json()
+                md = r3.json()
                 headers_list = md.get("payload",{}).get("headers",[])
                 from_h = next((h["value"] for h in headers_list if h["name"]=="From"), "")
                 subj_h = next((h["value"] for h in headers_list if h["name"]=="Subject"), "")
                 snippet = md.get("snippet","")
-                emails.append({"from": from_h, "subject": subj_h, "snippet": snippet, "id": m["id"]})
+
+                # Extract full body text — handles plain text, multipart, encoded
+                body_text = _extract_gmail_body(md.get("payload", {}))
+                full_text = f"{subj_h} {snippet} {body_text}"
+
+                # Find all loom URLs in full text
+                loom_matches = re.findall(r'https?://(?:www\.)?loom\.com/share/[\w]+', full_text)
+                loom_url = loom_matches[0] if loom_matches else None
+
+                print(f"[GMAIL] msg={m['id'][:8]} from={from_h[:40]} loom={loom_url} body_len={len(body_text)}")
+                emails.append({
+                    "from": from_h, "subject": subj_h,
+                    "snippet": snippet[:200], "id": m["id"],
+                    "loom_url": loom_url, "body_preview": body_text[:300]
+                })
         return emails
     except Exception as e:
         print(f"[GMAIL READ] Error: {e}")
         return []
+
+
+def _extract_gmail_body(payload: dict) -> str:
+    """Recursively extract plain text body from Gmail message payload"""
+    text = ""
+    mime = payload.get("mimeType","")
+    body = payload.get("body",{})
+    data = body.get("data","")
+
+    if data and mime in ("text/plain","text/html"):
+        try:
+            decoded = base64.urlsafe_b64decode(data + "==").decode("utf-8", errors="ignore")
+            # Strip basic HTML tags for URL extraction
+            decoded = re.sub(r'<[^>]+>', ' ', decoded)
+            text += decoded
+        except Exception:
+            pass
+
+    for part in payload.get("parts", []):
+        text += _extract_gmail_body(part)
+
+    return text
 settings_db = {
     "company": "Click Theory Capital",
     "role": "AI/ML Engineer",
@@ -1451,8 +1502,21 @@ async def human_decision(request: Request):
 async def get_candidates():
     return JSONResponse(list(candidates_db.values()))
 
-@app.get("/api/candidate/{cid}")
-async def get_candidate(cid: str):
+@app.post("/api/candidate/{cid}/loom")
+async def set_loom_manual(cid: str, request: Request, background_tasks: BackgroundTasks):
+    """Manually set a Loom URL for a candidate and trigger analysis"""
+    cand = candidates_db.get(cid)
+    if not cand:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    body = await request.json()
+    loom_url = body.get("loom_url","").strip()
+    if not loom_url or "loom.com" not in loom_url:
+        return JSONResponse({"error": "invalid loom URL"}, status_code=400)
+    cand.setdefault("assignment", {})["loom_url"] = loom_url
+    cand["stage"] = "loom_submitted"
+    add_event(cid, f"Loom URL set manually: {loom_url}")
+    background_tasks.add_task(_analyze_loom, cid, loom_url)
+    return JSONResponse({"ok": True, "loom_url": loom_url, "stage": cand["stage"]})
     c = candidates_db.get(cid)
     return JSONResponse(c if c else {"error": "not found"})
 
