@@ -289,11 +289,11 @@ textarea{resize:vertical;line-height:1.6;font-family:'JetBrains Mono',monospace;
   </div>
   <div class="vbody">
     <div class="alert al-a"><span>⚠</span><div>Loom video content is not auto-analyzed — AI confidence is transcript-based only. Always watch the Loom before deciding.</div></div>
-    <div id="rev-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:.75rem"></div>
+    <div id="rev-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:.85rem"></div>
     <div id="rev-empty" style="text-align:center;padding:3rem;color:var(--tx3)">
       <div style="font-size:28px;margin-bottom:.5rem">⏳</div>
-      <div style="font-size:13px;font-weight:500">No candidates ready for review yet</div>
-      <div style="font-size:12px;margin-top:.4rem">Candidates appear here after completing Loom assignment + video interview</div>
+      <div style="font-size:13px;font-weight:500">No candidates in review yet</div>
+      <div style="font-size:12px;margin-top:.4rem">Candidates appear here after completing all pipeline stages</div>
     </div>
   </div>
 </div>
@@ -468,9 +468,25 @@ textarea{resize:vertical;line-height:1.6;font-family:'JetBrains Mono',monospace;
 
 <!-- CANDIDATE DETAIL POPUP (Review) -->
 <div class="popup-bg" id="review-popup">
-  <div class="popup">
+  <div class="popup" style="max-width:760px;width:96vw">
     <button class="popup-x" onclick="closeReviewPopup()">✕</button>
     <div id="review-popup-body"></div>
+  </div>
+</div>
+
+<!-- EMAIL COMPOSE POPUP -->
+<div class="popup-bg" id="email-popup">
+  <div class="popup" style="max-width:620px;width:96vw">
+    <button class="popup-x" onclick="closeEmailPopup()">✕</button>
+    <div id="email-popup-title" style="font-size:16px;font-weight:700;margin-bottom:1rem"></div>
+    <div class="field"><label>To</label><input type="text" id="ep-to" readonly style="opacity:.7"/></div>
+    <div class="field"><label>Subject</label><input type="text" id="ep-subject"/></div>
+    <div class="field" style="margin-bottom:.75rem"><label>Body</label><textarea id="ep-body" rows="12" style="font-family:'Inter',sans-serif;font-size:13px;line-height:1.75"></textarea></div>
+    <div style="display:flex;gap:.6rem;align-items:center">
+      <button class="btn btn-p" id="ep-send-btn" style="flex:1;font-size:13px;padding:.65rem" onclick="sendEmailFromPopup()">Send Email →</button>
+      <button class="btn" onclick="closeEmailPopup()">Cancel</button>
+      <span id="ep-result" style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--tx3)"></span>
+    </div>
   </div>
 </div>
 
@@ -897,105 +913,271 @@ function openIVRoom(cid, name) {
 
 // ── REVIEW PAGE ───────────────────────────────────────────────────
 function renderReview() {
-  var all = Object.values(cands).filter(function(c) { return c.stage==='ready_for_review'||c.final_score||c.stage==='hired'||c.stage==='passed'; });
+  var all = Object.values(cands).filter(function(c) {
+    return c.stage==='ready_for_review'||c.final_score||c.stage==='hired'||c.stage==='passed'||
+           (c.stage||'').includes('reject');
+  });
   document.getElementById('rev-empty').style.display = all.length ? 'none' : 'block';
-  document.getElementById('rev-grid').innerHTML = all.sort(function(a,b){return(b.final_score||0)-(a.final_score||0);}).map(function(c) {
-    var final = c.final_score||0;
-    var fc = final>=75?'var(--grn)':final>=60?'var(--amb)':'var(--red)';
-    var decided = c.stage==='hired'||c.stage==='passed';
-    return '<div style="background:var(--bg1);border:1px solid var(--bd2);border-radius:10px;padding:1rem;cursor:pointer;transition:all .15s" onclick="openReviewPopup(\''+c.id+'\')" onmouseover="this.style.borderColor=\'var(--grn-bd)\'" onmouseout="this.style.borderColor=\'var(--bd2)\'">' +
-      '<div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.75rem">' +
-      '<div class="sring" style="border-color:'+fc+';width:52px;height:52px"><div class="sr-n" style="color:'+fc+';font-size:16px">'+final+'</div><div class="sr-l">/100</div></div>' +
-      '<div><div style="font-size:14px;font-weight:600">'+c.name+'</div><div style="font-size:10px;color:var(--tx3);font-family:\'JetBrains Mono\',monospace">'+c.email+'</div>' +
-      '<span class="tag '+(c.stage==='hired'?'t-g':c.stage==='passed'?'t-r':(final>=75?'t-g':final>=60?'t-a':'t-r'))+'" style="margin-top:.3rem;display:inline-flex">'+(c.stage==='hired'?'Hired':c.stage==='passed'?'Passed':c.final_verdict||'Pending')+'</span></div></div>' +
-      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.3rem;margin-bottom:.75rem;font-size:10px">' +
-      '<div style="background:var(--bg2);border-radius:5px;padding:.4rem;text-align:center"><div style="color:var(--tx3)">Resume</div><div style="font-weight:700;color:var(--tx)">'+(c.score||'—')+'</div></div>' +
-      '<div style="background:var(--bg2);border-radius:5px;padding:.4rem;text-align:center"><div style="color:var(--tx3)">Phone</div><div style="font-weight:700;color:var(--tx)">'+((c.phone_interview&&c.phone_interview.score)?c.phone_interview.score.overall_score:'—')+'</div></div>' +
-      '<div style="background:var(--bg2);border-radius:5px;padding:.4rem;text-align:center"><div style="color:var(--tx3)">Loom</div><div style="font-weight:700;color:var(--tx)">'+((c.assignment&&c.assignment.score)?c.assignment.score.content_score:'—')+'</div></div>' +
-      '</div>' +
-      (decided ? '' : '<div style="display:flex;gap:.4rem"><button class="btn btn-p" style="flex:1;font-size:11px" onclick="event.stopPropagation();openReviewPopup(\''+c.id+'\')">View & Decide</button></div>') +
+
+  document.getElementById('rev-grid').innerHTML = all
+    .sort(function(a,b){return(b.final_score||0)-(a.final_score||0);})
+    .map(function(c) {
+      var final = c.final_score||0;
+      var fc = final>=75?'var(--grn)':final>=60?'var(--amb)':'var(--red)';
+      var hired = c.stage==='hired';
+      var rejected = c.stage==='passed'||(c.stage||'').includes('reject');
+      var decided = hired || rejected;
+      var ph = c.phone_interview&&c.phone_interview.score?c.phone_interview.score.overall_score:null;
+      var vi = c.video_interview&&c.video_interview.score?c.video_interview.score.overall_score:null;
+      var lo = c.assignment&&c.assignment.score?c.assignment.score.content_score:null;
+
+      // Work out if any stage failed
+      var phoneFailed  = (c.stage||'').includes('rejected_phone') || (ph!==null&&ph<65);
+      var resumeFailed = (c.stage||'').includes('rejected_resume') || (c.score&&c.score<50);
+      var allPassed    = c.score>=65 && ph>=65 && (!lo||lo>=60) && (!vi||vi>=60);
+
+      function miniScore(label, val, failed) {
+        var col = failed?'var(--red)':val>=75?'var(--grn)':val>=50?'var(--amb)':'var(--tx3)';
+        return '<div style="background:var(--bg2);border:1px solid '+(failed?'var(--red)':'var(--bd2)')+';border-radius:5px;padding:.35rem .5rem;text-align:center">' +
+               '<div style="font-size:8px;color:var(--tx3);font-family:\'JetBrains Mono\',monospace">'+label+'</div>' +
+               '<div style="font-size:14px;font-weight:700;color:'+col+'">'+(val!==null&&val!==undefined?val:'—')+'</div></div>';
+      }
+
+      return '<div style="background:var(--bg1);border:2px solid '+(hired?'var(--grn-bd)':rejected?'#3d1515':'var(--bd2)')+';border-radius:12px;padding:1.1rem;cursor:pointer;transition:all .15s" onclick="openReviewPopup(\''+c.id+'\')" onmouseover="this.style.borderColor=\''+(hired?'var(--grn)':rejected?'var(--red)':'var(--grn-bd)')+'\'" onmouseout="this.style.borderColor=\''+(hired?'var(--grn-bd)':rejected?'#3d1515':'var(--bd2)')+'\'">'+
+
+        // Header row
+        '<div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.85rem">'+
+        '<div class="sring" style="border-color:'+fc+';width:54px;height:54px;flex-shrink:0"><div class="sr-n" style="color:'+fc+';font-size:17px">'+(final||'—')+'</div><div class="sr-l">/100</div></div>'+
+        '<div style="flex:1;min-width:0">'+
+          '<div style="font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+c.name+'</div>'+
+          '<div style="font-size:10px;color:var(--tx3);font-family:\'JetBrains Mono\',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+c.email+'</div>'+
+          '<div style="margin-top:.3rem"><span class="tag '+(hired?'t-g':rejected?'t-r':final>=75?'t-g':final>=60?'t-a':'t-r')+'">'+(hired?'✓ Hired':rejected?'✗ Rejected':c.final_verdict||'Pending')+'</span></div>'+
+        '</div></div>'+
+
+        // Stage scores grid
+        '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:.3rem;margin-bottom:.75rem">'+
+        miniScore('Resume',c.score,resumeFailed)+
+        miniScore('Phone',ph,phoneFailed)+
+        miniScore('Video',vi,false)+
+        miniScore('Loom',lo,false)+
+        '</div>'+
+
+        // Stage pipeline visual
+        (function(){
+          var stages = [
+            {l:'Resume', pass: c.score>=65, score: c.score, done: c.score!=null},
+            {l:'Phone',  pass: ph>=65,       score: ph,      done: ph!=null},
+            {l:'Loom',   pass: lo>=60,       score: lo,      done: lo!=null},
+            {l:'Video',  pass: vi>=60,       score: vi,      done: vi!=null},
+          ];
+          return '<div style="display:flex;align-items:center;gap:3px;margin-bottom:.85rem">'+
+            stages.map(function(s,i){
+              var col = !s.done?'var(--bg3)':s.pass?'var(--grn)':'var(--red)';
+              var txt = !s.done?'—':(s.pass?'✓':'✗');
+              return '<div style="flex:1;background:'+col+';border-radius:4px;padding:3px 2px;text-align:center">'+
+                '<div style="font-size:8px;color:'+(s.done?'#fff':'var(--tx3)')+';font-weight:700;font-family:\'JetBrains Mono\',monospace">'+txt+'</div>'+
+                '<div style="font-size:7px;color:'+(s.done?'rgba(255,255,255,.7)':'var(--tx3)')+'">'+s.l+'</div>'+
+              '</div>' + (i<stages.length-1?'<div style="width:3px;height:2px;background:var(--bd2)"></div>':'');
+            }).join('') +
+          '</div>';
+        })() +
+
+        // Action button
+        (!decided ?
+          '<button class="btn btn-p" style="width:100%;font-size:11px" onclick="event.stopPropagation();openReviewPopup(\''+c.id+'\')">View Full Report & Decide →</button>'
+          : '') +
       '</div>';
-  }).join('');
+    }).join('');
 }
 
 function openReviewPopup(cid) {
   var c = cands[cid]; if (!c) return;
   var final = c.final_score||0;
   var fc = final>=75?'var(--grn)':final>=60?'var(--amb)':'var(--red)';
-  var ph = c.phone_interview&&c.phone_interview.score?c.phone_interview.score:{};
-  var vi = c.video_interview&&c.video_interview.score?c.video_interview.score:{};
+  var ph  = c.phone_interview&&c.phone_interview.score ? c.phone_interview.score : null;
+  var vi  = c.video_interview&&c.video_interview.score ? c.video_interview.score : null;
   var asgn = c.assignment||{};
-  var ls = asgn.score||{};
-  var cf = asgn.confidence||0;
+  var ls  = asgn.score||null;
 
-  var h = '<div style="display:flex;align-items:center;gap:1rem;margin-bottom:1.25rem">';
-  h += '<div class="sring" style="border-color:'+fc+';width:72px;height:72px;border-width:3px"><div class="sr-n" style="color:'+fc+';font-size:24px">'+final+'</div><div class="sr-l">/100</div></div>';
-  h += '<div><div style="font-size:18px;font-weight:600">'+c.name+'</div><div style="font-size:11px;color:var(--tx3);font-family:\'JetBrains Mono\',monospace">'+c.email+(c.phone?' · '+c.phone:'')+'</div>';
-  h += '<div style="margin-top:.4rem"><span class="tag '+(final>=75?'t-g':final>=60?'t-a':'t-r')+'">'+( c.final_verdict||'Pending')+'</span></div></div></div>';
+  // Determine pass/fail for each stage
+  var stageResults = [
+    { name:'Resume Screening', score: c.score, pass: c.score>=65, verdict: c.score>=65?'Passed':'Below threshold',
+      summary: c.assessment, color:'var(--grn)' },
+    { name:'Phone Interview',  score: ph?ph.overall_score:null, pass: ph&&ph.overall_score>=65,
+      verdict: ph?ph.verdict:'Not completed', summary: ph?ph.summary:'', color:'var(--vio)',
+      strengths: ph?ph.key_strengths:[], concerns: ph?ph.concerns:[] },
+    { name:'Loom Assignment',  score: ls?ls.content_score:null, pass: ls&&ls.content_score>=60,
+      verdict: ls?ls.verdict:'Not submitted', summary: ls?ls.summary:'',
+      note: ls?ls.human_review_notes:'', color:'var(--cyn)',
+      loom_url: asgn.loom_url },
+    { name:'Video Interview',  score: vi?vi.overall_score:null, pass: vi&&vi.overall_score>=60,
+      verdict: vi?vi.verdict:'Not completed', summary: vi?vi.summary:'', color:'var(--blu)',
+      strengths: vi?vi.key_strengths:[], concerns: vi?vi.concerns:[] },
+  ];
 
-  // All scores
-  h += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:.4rem;margin-bottom:1rem">';
-  function sb(l,n,max){var c2=n>=(max||75)?'var(--grn)':n>=(max?max*0.6:50)?'var(--amb)':'var(--red)';return '<div style="background:var(--bg2);border-radius:7px;padding:.65rem;text-align:center;border:1px solid var(--bd2)"><div style="font-size:9px;color:var(--tx3);font-family:\'JetBrains Mono\',monospace;margin-bottom:3px">'+l+'</div><div style="font-size:20px;font-weight:700;color:'+(n?c2:'var(--tx3)')+'>'+(n||'—')+'</div></div>';}
-  h += sb('Resume',c.score)+sb('Phone',ph.overall_score)+sb('Video',vi.overall_score)+sb('Loom',ls.content_score);
+  var anyFailed   = stageResults.some(function(s){ return s.score!==null && !s.pass; });
+  var allComplete = stageResults.every(function(s){ return s.score!==null; });
+  var decided     = c.stage==='hired'||c.stage==='passed';
+
+  var h = '';
+
+  // ── Header
+  h += '<div style="display:flex;align-items:center;gap:1rem;margin-bottom:1.1rem">';
+  h += '<div class="sring" style="border-color:'+fc+';width:72px;height:72px;border-width:3px;flex-shrink:0"><div class="sr-n" style="color:'+fc+';font-size:22px">'+final+'</div><div class="sr-l">/100</div></div>';
+  h += '<div><div style="font-size:18px;font-weight:700">'+c.name+'</div>';
+  h += '<div style="font-size:11px;color:var(--tx3);font-family:\'JetBrains Mono\',monospace">'+c.email+(c.phone?' · '+c.phone:'')+'</div>';
+  h += '<div style="margin-top:.4rem;display:flex;gap:.4rem;flex-wrap:wrap">';
+  h += '<span class="tag '+(final>=75?'t-g':final>=60?'t-a':'t-r')+'">'+( c.final_verdict||'Pending')+'</span>';
+  if (anyFailed)   h += '<span class="tag t-r" style="font-size:9px">⚠ Failed stages</span>';
+  if (allComplete) h += '<span class="tag t-g" style="font-size:9px">✓ All stages complete</span>';
+  h += '</div></div></div>';
+
+  // ── Score bar
+  h += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:.4rem;margin-bottom:1.1rem">';
+  stageResults.forEach(function(s){
+    var sc = s.score; var col = sc===null?'var(--tx3)':s.pass?'var(--grn)':'var(--red)';
+    var bg = sc===null?'var(--bg2)':s.pass?'rgba(16,185,129,.08)':'rgba(239,68,68,.08)';
+    var bd = sc===null?'var(--bd2)':s.pass?'var(--grn-bd)':'#b91c1c';
+    h += '<div style="background:'+bg+';border:1px solid '+bd+';border-radius:8px;padding:.6rem;text-align:center">';
+    h += '<div style="font-size:8px;color:var(--tx3);font-family:\'JetBrains Mono\',monospace;text-transform:uppercase;margin-bottom:3px">'+s.name.split(' ')[0]+'</div>';
+    h += '<div style="font-size:20px;font-weight:700;color:'+col+'">'+(sc!==null?sc:'—')+'</div>';
+    h += '<div style="font-size:9px;color:'+col+';margin-top:1px">'+(sc!==null?(s.pass?'✓ Pass':'✗ Fail'):'–')+'</div>';
+    h += '</div>';
+  });
   h += '</div>';
 
-  // Confidence
-  if (cf) {
-    var cc=cf>=70?'var(--grn)':cf>=50?'var(--amb)':'var(--red)';
-    h += '<div style="margin-bottom:1rem"><div style="font-size:9px;color:var(--tx3);font-family:\'JetBrains Mono\',monospace;margin-bottom:.35rem">AI CONFIDENCE SCORE</div><div style="display:flex;align-items:center;gap:.75rem"><div style="flex:1;height:6px;background:var(--bg3);border-radius:99px;overflow:hidden"><div style="height:100%;width:'+cf+'%;background:'+cc+';border-radius:99px"></div></div><span style="font-weight:700;font-size:14px;color:'+cc+';font-family:\'JetBrains Mono\',monospace">'+cf+'%</span></div>';
-    if (ls.human_review_notes) h += '<div style="font-size:11px;color:var(--tx3);margin-top:.3rem">'+ls.human_review_notes+'</div>';
-    h += '</div>';
-  }
+  // ── Stage-by-stage breakdown
+  h += '<div style="font-size:9px;font-weight:700;color:var(--tx3);text-transform:uppercase;letter-spacing:.08em;font-family:\'JetBrains Mono\',monospace;margin-bottom:.5rem">Stage Breakdown</div>';
 
-  // Phone analysis
-  if (ph.summary) {
-    h += '<div style="background:var(--bg2);border-radius:8px;padding:.85rem;margin-bottom:.65rem;border:1px solid var(--bd2)">';
-    h += '<div style="font-size:9px;font-weight:700;color:var(--vio);font-family:\'JetBrains Mono\',monospace;margin-bottom:.4rem">PHONE INTERVIEW · '+ph.overall_score+'/100</div>';
-    h += '<div style="font-size:12px;color:var(--tx2);line-height:1.65;margin-bottom:.3rem">'+ph.summary+'</div>';
-    if (ph.key_strengths&&ph.key_strengths.length) h += '<div style="font-size:11px;color:var(--grn)">Strengths: '+ph.key_strengths.join(' · ')+'</div>';
-    if (ph.concerns&&ph.concerns.length) h += '<div style="font-size:11px;color:var(--amb);margin-top:.2rem">Concerns: '+ph.concerns.join(' · ')+'</div>';
-    h += '</div>';
-  }
+  stageResults.forEach(function(s) {
+    var sc = s.score;
+    var notDone = sc === null;
+    var bg  = notDone?'var(--bg2)':s.pass?'rgba(16,185,129,.06)':'rgba(239,68,68,.06)';
+    var bdc = notDone?'var(--bd2)':s.pass?'var(--grn-bd)':'#b91c1c';
+    var icon = notDone?'○':s.pass?'✓':'✗';
+    var ic   = notDone?'var(--tx3)':s.pass?'var(--grn)':'var(--red)';
 
-  // Video analysis
-  if (vi.summary) {
-    h += '<div style="background:var(--bg2);border-radius:8px;padding:.85rem;margin-bottom:.65rem;border:1px solid var(--bd2)">';
-    h += '<div style="font-size:9px;font-weight:700;color:var(--blu);font-family:\'JetBrains Mono\',monospace;margin-bottom:.4rem">VIDEO INTERVIEW · '+vi.overall_score+'/100</div>';
-    h += '<div style="font-size:12px;color:var(--tx2);line-height:1.65;margin-bottom:.3rem">'+vi.summary+'</div>';
-    if (vi.key_strengths&&vi.key_strengths.length) h += '<div style="font-size:11px;color:var(--grn)">Strengths: '+vi.key_strengths.join(' · ')+'</div>';
+    h += '<div style="background:'+bg+';border:1px solid '+bdc+';border-radius:9px;padding:.85rem;margin-bottom:.55rem">';
+    h += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:'+(s.summary?'.5rem':'0')+'">';
+    h += '<div style="display:flex;align-items:center;gap:.5rem">';
+    h += '<span style="font-size:14px;font-weight:700;color:'+ic+'">'+icon+'</span>';
+    h += '<span style="font-size:12px;font-weight:700;color:var(--tx)">'+s.name+'</span>';
+    if (!notDone) h += '<span style="font-size:10px;color:'+ic+';font-family:\'JetBrains Mono\',monospace;margin-left:.3rem">'+s.verdict+'</span>';
     h += '</div>';
-  }
-
-  // Loom
-  if (ls.what_they_built) {
-    h += '<div style="background:var(--bg2);border-radius:8px;padding:.85rem;margin-bottom:.65rem;border:1px solid var(--bd2)">';
-    h += '<div style="font-size:9px;font-weight:700;color:var(--cyn);font-family:\'JetBrains Mono\',monospace;margin-bottom:.4rem">LOOM ASSIGNMENT · '+ls.content_score+'/100 <span style="color:var(--amb);font-weight:400">· VIDEO REVIEW REQUIRED</span></div>';
-    h += '<div style="font-size:12px;color:var(--tx2);margin-bottom:.3rem"><strong>Built:</strong> '+ls.what_they_built+'</div>';
-    if (ls.summary) h += '<div style="font-size:12px;color:var(--tx2)">'+ls.summary+'</div>';
-    if (asgn.loom_url) h += '<a href="'+asgn.loom_url+'" target="_blank" style="display:inline-flex;align-items:center;gap:.3rem;font-size:11px;color:var(--cyn);margin-top:.4rem;text-decoration:none">🎬 Watch Loom Video ↗</a>';
+    h += '<span style="font-size:16px;font-weight:700;color:'+ic+';font-family:\'JetBrains Mono\',monospace">'+(sc!==null?sc+'/100':'—')+'</span>';
     h += '</div>';
-  }
 
-  // Decision buttons
-  var decided = c.stage==='hired'||c.stage==='passed';
+    if (s.summary) h += '<div style="font-size:12px;color:var(--tx2);line-height:1.7;margin-bottom:.35rem">'+s.summary+'</div>';
+    if (s.strengths&&s.strengths.length) h += '<div style="font-size:11px;color:var(--grn);margin-bottom:.2rem">✓ '+s.strengths.join(' · ')+'</div>';
+    if (s.concerns&&s.concerns.length)   h += '<div style="font-size:11px;color:var(--amb);margin-bottom:.2rem">⚠ '+s.concerns.join(' · ')+'</div>';
+    if (s.note)    h += '<div style="font-size:11px;color:var(--amb);font-style:italic">'+s.note+'</div>';
+    if (s.loom_url) h += '<a href="'+s.loom_url+'" target="_blank" style="display:inline-flex;align-items:center;gap:.3rem;font-size:11px;color:var(--cyn);margin-top:.35rem;text-decoration:none">🎬 Watch Loom ↗</a>';
+    h += '</div>';
+  });
+
+  // ── Decision buttons
+  h += '<div style="border-top:1px solid var(--bd2);margin-top:.75rem;padding-top:.85rem">';
   if (!decided) {
-    h += '<div class="div"></div>';
-    h += '<div style="font-size:10px;color:var(--tx3);font-family:\'JetBrains Mono\',monospace;margin-bottom:.6rem">YOUR DECISION</div>';
-    h += '<div style="display:flex;gap:.6rem;align-items:flex-start;flex-wrap:wrap">';
-    h += '<button class="btn btn-p" style="font-size:13px;padding:.65rem 1.5rem" onclick="decideFromPopup(\''+cid+'\',\'hire\')">✓ Hire — Send Offer Email</button>';
-    h += '<button class="btn btn-d" style="font-size:13px;padding:.65rem 1.5rem" onclick="decideFromPopup(\''+cid+'\',\'pass\')">✗ Reject — Send Rejection Email</button>';
-    h += '</div>';
+    h += '<div style="font-size:10px;color:var(--tx3);font-family:\'JetBrains Mono\',monospace;margin-bottom:.65rem;text-transform:uppercase;letter-spacing:.08em">Your Decision</div>';
+
+    if (anyFailed) {
+      // Candidate failed one or more stages — rejection highlighted, offer dimmed
+      h += '<div style="background:rgba(239,68,68,.07);border:1px solid #b91c1c;border-radius:9px;padding:.75rem;margin-bottom:.6rem">';
+      h += '<div style="font-size:11px;color:var(--red);font-family:\'JetBrains Mono\',monospace;margin-bottom:.5rem">⚠ This candidate failed one or more stages — rejection is recommended</div>';
+      h += '<div style="display:flex;gap:.5rem">';
+      h += '<button class="btn" style="flex:1;font-size:13px;padding:.65rem;background:var(--red);color:#fff;border-color:var(--red);font-weight:700" onclick="openEmailPopup(\''+cid+'\',\'rejection\')">✗ Send Rejection Email</button>';
+      h += '<button class="btn" style="font-size:12px;padding:.65rem .9rem;opacity:.55" onclick="openEmailPopup(\''+cid+'\',\'offer\')" title="Override: send offer despite failed stages">Override: Send Offer</button>';
+      h += '</div></div>';
+    } else {
+      // Candidate passed — both buttons equal
+      h += '<div style="display:flex;gap:.6rem">';
+      h += '<button class="btn btn-p" style="flex:1;font-size:13px;padding:.75rem;font-weight:700" onclick="openEmailPopup(\''+cid+'\',\'offer\')">✓ Send Offer Letter</button>';
+      h += '<button class="btn btn-d" style="flex:1;font-size:13px;padding:.75rem" onclick="openEmailPopup(\''+cid+'\',\'rejection\')">✗ Send Rejection</button>';
+      h += '</div>';
+    }
     h += '<div id="popup-dec-msg" style="margin-top:.5rem;font-size:11px;font-family:\'JetBrains Mono\',monospace;color:var(--tx3)"></div>';
   } else {
-    h += '<div class="div"></div>';
-    h += '<div class="alert '+(c.stage==='hired'?'al-g':'al-r')+'"><span>'+(c.stage==='hired'?'✓':'✗')+'</span><div>Decision recorded: '+(c.stage==='hired'?'HIRED — Offer email sent':'REJECTED — Rejection email sent')+'</div></div>';
+    h += '<div class="alert '+(c.stage==='hired'?'al-g':'al-r')+'">';
+    h += '<span>'+(c.stage==='hired'?'✓':'✗')+'</span>';
+    h += '<div><strong>'+(c.stage==='hired'?'HIRED':'REJECTED')+'</strong> — '+(c.stage==='hired'?'Offer email sent to candidate':'Rejection email sent to candidate')+'</div>';
+    h += '</div>';
   }
+  h += '</div>';
 
   document.getElementById('review-popup-body').innerHTML = h;
   document.getElementById('review-popup').classList.add('on');
 }
 
 function closeReviewPopup() { document.getElementById('review-popup').classList.remove('on'); }
+
+// ── Email compose popup
+var _epCid = null;
+var _epType = null;
+
+function openEmailPopup(cid, type) {
+  _epCid = cid; _epType = type;
+  var c = cands[cid]; if (!c) return;
+  var isOffer = type === 'offer';
+  var tmpl = tmplData[isOffer ? 'offer' : 'rejection'] || {};
+  var role = 'AI/ML Engineer';
+
+  function fill(s) {
+    return (s||'').replace(/{name}/g, c.name).replace(/{role}/g, role)
+      .replace(/{submit_url}/g,'').replace(/{interview_url}/g,'');
+  }
+
+  document.getElementById('email-popup-title').innerHTML =
+    '<span style="color:'+(isOffer?'var(--grn)':'var(--red)')+'">'+
+    (isOffer?'✓ Offer Letter':'✗ Rejection Email')+
+    '</span> <span style="font-size:12px;color:var(--tx3);font-weight:400">to '+c.name+'</span>';
+
+  document.getElementById('ep-to').value = c.email||'';
+  document.getElementById('ep-subject').value = fill(tmpl.subject) || (isOffer?'Offer — Click Theory Capital':'Application Update — Click Theory Capital');
+  document.getElementById('ep-body').value = fill(tmpl.body) || '';
+  document.getElementById('ep-result').textContent = '';
+
+  var btn = document.getElementById('ep-send-btn');
+  btn.textContent = isOffer ? '✓ Send Offer Letter →' : '✗ Send Rejection Email →';
+  btn.style.background = isOffer ? 'var(--grn)' : 'var(--red)';
+  btn.style.borderColor = isOffer ? 'var(--grn-bd)' : '#b91c1c';
+  btn.style.color = isOffer ? '#000' : '#fff';
+
+  document.getElementById('email-popup').classList.add('on');
+}
+
+function closeEmailPopup() { document.getElementById('email-popup').classList.remove('on'); }
+
+async function sendEmailFromPopup() {
+  var to      = document.getElementById('ep-to').value;
+  var subject = document.getElementById('ep-subject').value;
+  var body    = document.getElementById('ep-body').value;
+  var result  = document.getElementById('ep-result');
+  var btn     = document.getElementById('ep-send-btn');
+  if (!to||!subject||!body) { result.textContent='Fill in all fields'; return; }
+  btn.disabled=true; result.style.color='var(--tx3)'; result.textContent='⏳ Sending...';
+  try {
+    var r = await req('/api/email/send','POST',{to:to,subject:subject,body:body});
+    if (r.ok) {
+      result.style.color='var(--grn)'; result.textContent='✓ Email sent!';
+      // Record decision
+      if (_epCid) {
+        var dec = _epType==='offer'?'hire':'pass';
+        await req('/api/pipeline/decision','POST',{candidate_id:_epCid,decision:dec,notes:''});
+        if (cands[_epCid]) cands[_epCid].stage = dec==='hire'?'hired':'passed';
+        updateBadges();
+      }
+      setTimeout(function(){
+        closeEmailPopup(); closeReviewPopup(); renderReview();
+      }, 1200);
+    } else {
+      result.style.color='var(--red)'; result.textContent='✗ '+(r.error||'Send failed');
+      btn.disabled=false;
+    }
+  } catch(e) {
+    result.style.color='var(--red)'; result.textContent='✗ '+e.message;
+    btn.disabled=false;
+  }
+}
 
 async function decideFromPopup(cid, decision) {
   var r = await req('/api/pipeline/decision','POST',{candidate_id:cid,decision:decision,notes:''});
