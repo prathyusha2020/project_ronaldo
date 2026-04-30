@@ -103,46 +103,39 @@ async def _poll_active_calls():
 
 
 async def _poll_inbox_for_looms():
-    """Background task — checks Gmail every 5 min for Loom submissions from candidates in assignment_sent stage."""
-    await asyncio.sleep(60)  # Wait 1 min after startup
+    """Background task — checks Gmail every 5 min using direct API for Loom submissions."""
+    await asyncio.sleep(90)  # Wait 90s after startup before first check
     while True:
         try:
-            waiting = [cid for cid, c in candidates_db.items() if c.get("stage") == "assignment_sent"]
-            if waiting:
-                print(f"[INBOX POLLER] Checking inbox for {len(waiting)} candidates awaiting Loom...")
-                response = await ask_claude(
-                    f"You are monitoring the Gmail inbox for {AI_EMAIL} as part of an AI hiring system.",
-                    """Read the inbox and find any emails from candidates that contain a Loom video link (loom.com/share).
-For each such email, extract:
-- from: sender email address
-- loom_url: the full loom.com/share URL
-
-Return a JSON array only, no other text:
-[{"from": "candidate@email.com", "loom_url": "https://www.loom.com/share/abc123"}]
-
-If no Loom links found, return: []""",
-                    max_tokens=800, mcp_servers=[get_gmail_mcp()]
-                )
-                import re as _re
-                match = _re.search(r"\[.*?\]", response, _re.DOTALL)
-                submissions = json.loads(match.group(0)) if match else []
-                for sub in submissions:
-                    sender = sub.get("from", "").lower()
-                    loom_url = sub.get("loom_url", "")
+            waiting = [cid for cid, c in candidates_db.items()
+                       if c.get("stage") == "assignment_sent"]
+            token = google_token_store.get("access_token","")
+            if waiting and token:
+                print(f"[INBOX POLLER] {len(waiting)} candidate(s) awaiting Loom — scanning inbox...")
+                emails = await _gmail_read_recent(10)
+                all_cand_emails = {
+                    c.get("email","").lower(): cid
+                    for cid, c in candidates_db.items() if c.get("email")
+                }
+                for email_item in emails:
+                    loom_url = email_item.get("loom_url")
                     if not loom_url:
                         continue
-                    for cid, cand in candidates_db.items():
-                        if (cand.get("email","").lower() == sender and
-                                cand.get("stage") == "assignment_sent" and
-                                not cand.get("assignment",{}).get("loom_url")):
-                            cand["assignment"]["loom_url"] = loom_url
+                    from_raw = email_item.get("from","")
+                    sender_match = re.search(r'[\w.+%-]+@[\w.-]+\.[a-zA-Z]{2,}', from_raw)
+                    sender_email = sender_match.group(0).lower() if sender_match else from_raw.lower()
+                    cid = all_cand_emails.get(sender_email)
+                    if cid and candidates_db[cid].get("stage") == "assignment_sent":
+                        cand = candidates_db[cid]
+                        if not cand.get("assignment",{}).get("loom_url"):
+                            cand.setdefault("assignment",{})["loom_url"] = loom_url
                             cand["stage"] = "loom_submitted"
-                            add_event(cid, f"[AUTO] Loom found in inbox: {loom_url}")
+                            add_event(cid, f"[AUTO] Loom detected in inbox: {loom_url}")
                             asyncio.create_task(_analyze_loom(cid, loom_url))
-                            print(f"[INBOX POLLER] Found Loom for {cand['name']}: {loom_url}")
+                            print(f"[INBOX POLLER] ✓ Loom matched to {cand['name']}: {loom_url}")
         except Exception as e:
-            print(f"[INBOX POLLER] error: {e}")
-        await asyncio.sleep(300)  # 5 minutes
+            print(f"[INBOX POLLER] Error: {e}")
+        await asyncio.sleep(300)  # Every 5 minutes
 
 
 @app.on_event("startup")
@@ -399,13 +392,32 @@ def _extract_gmail_body(payload: dict) -> str:
     return text
 settings_db = {
     "company": "Click Theory Capital",
+    "recruiter_name": "Alex",
     "role": "AI/ML Engineer",
+    "reviewer_email": "prathyusha.hyra@gmail.com",
+    "sender_email": "prathyusha.hyra@gmail.com",
     "phone_script": "You are Alex, a senior AI recruiter at Click Theory Capital.\nCandidate: {name} | Role: {role}\n\nSTRUCTURE (15 min):\n1. Warm welcome + Click Theory intro (1 min)\n2. Walk me through your most impressive AI project (3 min)\n3. How do you handle non-deterministic LLM output in production? (3 min)\n4. Describe a multi-step autonomous agent you built (3 min)\n5. Build a lead qualification agent in one week — your approach? (3 min)\n6. Why AI engineering + motivation (2 min)\n7. Close + next steps (1 min)\n\nBe warm but professional. Probe vague answers. End: 'We will be in touch within 48 hours.'\nDo not reveal you are an AI.",
-    "assignment_template": "Hi {name},\n\nCongratulations — you have passed the interview stages for the {role} role at Click Theory Capital!\n\nFor the final stage, please complete this assignment within 72 hours:\n\nTASK: Build an AI-powered lead qualification agent\n1. Accept a list of company names as input\n2. Research each company using web search\n3. Score each lead against an ICP (B2B, 50-500 employees, tech-forward)\n4. Draft a personalized outreach email per lead\n5. Return structured JSON output\n\nTech: Python + any LLM API (Claude preferred)\nSubmit via: {submit_url}\n\nWe look forward to seeing what you build!\nThe Click Theory Capital Team",
+    "assignment_template": "Hi {name},\n\nCongratulations — you have passed the phone interview for the {role} role at Click Theory Capital!\n\nFor the next stage, please complete this technical assignment within 72 hours:\n\nTASK: Build an AI-powered lead qualification agent\n1. Accept a list of company names as input\n2. Research each company using web search\n3. Score each lead against an ICP (B2B, 50-500 employees, tech-forward)\n4. Draft a personalized outreach email per lead\n5. Return structured JSON output\n\nTech: Python + any LLM API (Claude preferred)\nSubmit your Loom walkthrough at: {submit_url}\n\nWe look forward to seeing what you build!\nThe Click Theory Capital Team",
     "job_profile": {
         "criteria": "3+ years Python. LLM API experience (OpenAI/Anthropic). Production AI deployment. Agentic frameworks (LangChain/CrewAI). RAG + vector databases.",
         "mustHave": "Production AI systems, LLM API hands-on, agent/workflow experience",
         "redFlags": "Tutorial-only experience, no production systems, no LLM API experience"
+    }
+}
+
+# Jobs DB — multiple job descriptions
+import uuid as _uuid
+jobs_db = {
+    "job_ai_engineer": {
+        "id": "job_ai_engineer",
+        "title": "AI/ML Engineer",
+        "dept": "Engineering",
+        "description": "Build and deploy production AI systems, LLM-powered agents, and intelligent automation pipelines.",
+        "criteria": "3+ years Python. LLM API experience (OpenAI/Anthropic). Production AI deployment. Agentic frameworks (LangChain/CrewAI). RAG + vector databases.",
+        "mustHave": "Production AI systems, LLM API hands-on, agent/workflow experience",
+        "redFlags": "Tutorial-only experience, no production systems, no LLM API experience",
+        "threshold": 65,
+        "active": True
     }
 }
 
@@ -515,6 +527,54 @@ async def get_settings():
 async def save_settings(request: Request):
     body = await request.json()
     settings_db.update(body)
+    # Update REVIEWER_EMAIL and AI_EMAIL globals if changed
+    global REVIEWER_EMAIL, AI_EMAIL
+    if body.get("reviewer_email"): REVIEWER_EMAIL = body["reviewer_email"]
+    if body.get("sender_email"):   AI_EMAIL = body["sender_email"]
+    return JSONResponse({"ok": True})
+
+
+# ══════════════════════════════════════════════════════════════════
+# JOBS
+# ══════════════════════════════════════════════════════════════════
+
+@app.get("/api/jobs")
+async def get_jobs():
+    return JSONResponse(list(jobs_db.values()))
+
+@app.get("/api/job/{jid}")
+async def get_job(jid: str):
+    j = jobs_db.get(jid)
+    return JSONResponse(j if j else {"error": "not found"}, status_code=200 if j else 404)
+
+@app.post("/api/jobs")
+async def create_job(request: Request):
+    body = await request.json()
+    jid = body.get("id") or f"job_{_uuid.uuid4().hex[:8]}"
+    jobs_db[jid] = {
+        "id": jid,
+        "title":       body.get("title", "Untitled Role"),
+        "dept":        body.get("dept", ""),
+        "description": body.get("description", ""),
+        "criteria":    body.get("criteria", ""),
+        "mustHave":    body.get("mustHave", ""),
+        "redFlags":    body.get("redFlags", ""),
+        "threshold":   int(body.get("threshold", 65)),
+        "active":      True
+    }
+    return JSONResponse({"ok": True, "id": jid, "job": jobs_db[jid]})
+
+@app.put("/api/job/{jid}")
+async def update_job(jid: str, request: Request):
+    body = await request.json()
+    if jid not in jobs_db:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    jobs_db[jid].update({k: v for k, v in body.items() if k != "id"})
+    return JSONResponse({"ok": True, "job": jobs_db[jid]})
+
+@app.delete("/api/job/{jid}")
+async def delete_job(jid: str):
+    jobs_db.pop(jid, None)
     return JSONResponse({"ok": True})
 
 
@@ -575,10 +635,27 @@ async def extract_pdf(file: UploadFile = File(...)):
 @app.post("/api/screen")
 async def screen_resume(request: Request):
     body = await request.json()
-    profile = settings_db.get("job_profile", {})
+    # Use job-specific criteria if job_id provided, else fall back to settings
+    job_id = body.get("job_id", "")
+    job = jobs_db.get(job_id) if job_id else None
+    if job:
+        profile = {
+            "criteria": job.get("criteria",""),
+            "mustHave": job.get("mustHave",""),
+            "redFlags": job.get("redFlags",""),
+            "description": job.get("description","")
+        }
+        role_name = job.get("title", settings_db.get("role",""))
+    else:
+        profile = settings_db.get("job_profile", {})
+        role_name = settings_db.get("role","AI/ML Engineer")
+
+    company = settings_db.get("company","Click Theory Capital")
+
     raw = await ask_claude(
-        f"""You are an expert AI/ML hiring manager at Click Theory Capital.
+        f"""You are an expert hiring manager at {company}.
 Screen this resume against the job profile below.
+Role: {role_name}
 Job Profile: {json.dumps(profile)}
 
 Return ONLY valid JSON, no markdown, no extra text:
@@ -593,11 +670,11 @@ Return ONLY valid JSON, no markdown, no extra text:
   "verdict": "Strong Hire|Hire|Maybe|No Hire",
   "summary": "one sentence",
   "dimensions": [
-    {{"name": "AI/ML Experience", "score": 0, "note": ""}},
-    {{"name": "Production Systems", "score": 0, "note": ""}},
-    {{"name": "LLM/Agent Skills", "score": 0, "note": ""}},
-    {{"name": "Python/Engineering", "score": 0, "note": ""}},
-    {{"name": "Communication", "score": 0, "note": ""}}
+    {{"name": "Relevant Experience", "score": 0, "note": ""}},
+    {{"name": "Technical Skills", "score": 0, "note": ""}},
+    {{"name": "Production/Real-World", "score": 0, "note": ""}},
+    {{"name": "Role-Specific Skills", "score": 0, "note": ""}},
+    {{"name": "Communication/Culture", "score": 0, "note": ""}}
   ],
   "strengths": [],
   "concerns": [],
@@ -609,6 +686,8 @@ Return ONLY valid JSON, no markdown, no extra text:
     )
     try:
         result = json.loads(raw.replace("```json", "").replace("```", "").strip())
+        result["job_id"] = job_id
+        result["role"] = role_name
         return JSONResponse(result)
     except Exception as e:
         return JSONResponse({"error": str(e), "raw": raw[:300]}, status_code=500)
@@ -1413,58 +1492,79 @@ Dashboard: {APP_URL}
 
 @app.post("/api/check-inbox")
 async def check_inbox(background_tasks: BackgroundTasks):
-    """Read last 5 emails via Gmail REST API directly and find Loom links"""
+    """Read recent emails via Gmail REST API and find Loom links — auto-matches to candidates"""
     token = google_token_store.get("access_token","")
     if not token:
-        return JSONResponse({"emails_read": 0, "error": "Gmail not connected — go to /api/auth/gmail to connect"})
+        return JSONResponse({"emails_read": 0, "error": "Gmail not connected — go to /api/auth/gmail"})
     try:
-        emails = await _gmail_read_recent(5)
+        emails = await _gmail_read_recent(10)
         print(f"[INBOX CHECK] Read {len(emails)} emails")
-        for e in emails:
-            print(f"  from={e['from']} subj={e['subject'][:50]} snippet={e['snippet'][:60]}")
 
         processed = []
-        all_cand_emails = {c.get("email","").lower(): cid
-                           for cid, c in candidates_db.items() if c.get("email")}
+        unmatched_looms = []
+        all_cand_emails = {
+            c.get("email","").lower(): cid
+            for cid, c in candidates_db.items() if c.get("email")
+        }
 
         for email_item in emails:
-            sender = email_item.get("from","").lower()
-            snippet = email_item.get("snippet","")
-            subj = email_item.get("subject","")
-            combined_text = f"{subj} {snippet}"
+            # loom_url already extracted by _gmail_read_recent from full body
+            loom_url     = email_item.get("loom_url")
+            from_raw     = email_item.get("from","")
+            subject      = email_item.get("subject","")
+            body_preview = email_item.get("body_preview","")
 
-            # Extract loom URL from snippet/subject
-            loom_match = re.search(r'https?://(?:www\.)?loom\.com/share/[\w]+', combined_text)
-            loom_url = loom_match.group(0) if loom_match else None
+            print(f"[INBOX] from={from_raw[:50]} loom={loom_url}")
 
-            # Extract sender email
-            sender_clean = re.search(r'[\w.+%-]+@[\w.-]+\.[a-zA-Z]{2,}', sender)
-            sender_email = sender_clean.group(0).lower() if sender_clean else sender
+            if not loom_url:
+                continue
 
-            email_item["loom_url"] = loom_url
+            # Extract clean email from "Name <email@x.com>" or bare "email@x.com"
+            sender_match = re.search(r'[\w.+%-]+@[\w.-]+\.[a-zA-Z]{2,}', from_raw)
+            sender_email = sender_match.group(0).lower() if sender_match else from_raw.lower().strip()
 
-            if loom_url:
-                cid = all_cand_emails.get(sender_email)
-                if cid and cid in candidates_db:
-                    cand = candidates_db[cid]
-                    if not cand.get("assignment",{}).get("loom_url"):
-                        cand["assignment"]["loom_url"] = loom_url
-                        cand["stage"] = "loom_submitted"
-                        add_event(cid, f"Loom found in inbox from {sender_email}: {loom_url}")
-                        background_tasks.add_task(_analyze_loom, cid, loom_url)
-                        processed.append({"cid": cid, "name": cand["name"], "loom_url": loom_url})
-                        print(f"[INBOX] ✓ Matched Loom to candidate {cand['name']}")
-                else:
-                    print(f"[INBOX] Loom found from {sender_email} but no matching candidate in DB")
+            # Try direct email match first
+            cid = all_cand_emails.get(sender_email)
+
+            # Fuzzy match: if no direct match, check if any candidate name appears in subject/body
+            if not cid:
+                for c_email, c_id in all_cand_emails.items():
+                    cand_name = candidates_db[c_id].get("name","").lower()
+                    if cand_name and len(cand_name) > 3:
+                        if cand_name in subject.lower() or cand_name in body_preview.lower():
+                            cid = c_id
+                            print(f"[INBOX] Fuzzy matched by name '{cand_name}' in email body")
+                            break
+
+            if cid and cid in candidates_db:
+                cand = candidates_db[cid]
+                existing_loom = cand.get("assignment",{}).get("loom_url","")
+                if existing_loom and existing_loom == loom_url:
+                    print(f"[INBOX] Loom already processed for {cand['name']}")
+                    continue
+                cand.setdefault("assignment", {})["loom_url"] = loom_url
+                cand["stage"] = "loom_submitted"
+                add_event(cid, f"✓ Loom auto-detected in inbox from {sender_email}: {loom_url}")
+                background_tasks.add_task(_analyze_loom, cid, loom_url)
+                processed.append({
+                    "cid": cid, "name": cand["name"],
+                    "loom_url": loom_url, "from": from_raw
+                })
+                print(f"[INBOX] ✓ Matched Loom → {cand['name']}")
+            else:
+                unmatched_looms.append({"loom_url": loom_url, "from": from_raw, "subject": subject})
+                print(f"[INBOX] ⚠ Loom found from {sender_email} but no matching candidate")
 
         return JSONResponse({
-            "emails_read": len(emails),
-            "loom_found": len([e for e in emails if e.get("loom_url")]),
-            "processed": processed,
-            "raw_emails": emails
+            "emails_read":    len(emails),
+            "loom_found":     len([e for e in emails if e.get("loom_url")]),
+            "processed":      processed,
+            "unmatched":      unmatched_looms,
+            "raw_emails":     emails
         })
     except Exception as e:
         print(f"[INBOX CHECK] Error: {e}")
+        import traceback; traceback.print_exc()
         return JSONResponse({"emails_read": 0, "error": str(e)})
 
 
@@ -1517,6 +1617,52 @@ async def set_loom_manual(cid: str, request: Request, background_tasks: Backgrou
     add_event(cid, f"Loom URL set manually: {loom_url}")
     background_tasks.add_task(_analyze_loom, cid, loom_url)
     return JSONResponse({"ok": True, "loom_url": loom_url, "stage": cand["stage"]})
+
+
+@app.post("/api/candidate/{cid}/loom/details")
+async def set_loom_details_manual(cid: str, request: Request):
+    """Save manually entered Loom details — no AI analysis required"""
+    cand = candidates_db.get(cid)
+    if not cand:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    body = await request.json()
+    asgn = cand.setdefault("assignment", {})
+
+    loom_url     = body.get("loom_url","").strip()
+    what_built   = body.get("what_built","").strip()
+    manual_score = body.get("manual_score")
+    notes        = body.get("notes","").strip()
+    transcript   = body.get("transcript","").strip()
+
+    if loom_url:
+        asgn["loom_url"] = loom_url
+
+    if transcript:
+        asgn["transcript"] = transcript
+
+    # Build or update the score object from manual input
+    existing = asgn.get("score") or {}
+    if what_built or manual_score or notes:
+        score_obj = {
+            **existing,
+            "content_score":  manual_score if manual_score is not None else existing.get("content_score", 0),
+            "what_they_built": what_built or existing.get("what_they_built",""),
+            "summary":        notes or existing.get("summary",""),
+            "verdict":        "Manual Entry",
+            "confidence_score": existing.get("confidence_score", 0),
+            "human_review_notes": "Score and details entered manually by reviewer — AI analysis not performed." if not existing else existing.get("human_review_notes",""),
+        }
+        asgn["score"] = score_obj
+        if manual_score is not None:
+            asgn["confidence"] = manual_score
+
+    # Advance stage if we have enough info
+    if loom_url or what_built:
+        if cand["stage"] in ("assignment_sent", "profiled"):
+            cand["stage"] = "loom_submitted"
+
+    add_event(cid, f"Loom details saved manually — score={manual_score}, built='{what_built[:40] if what_built else '—'}'")
+    return JSONResponse({"ok": True, "stage": cand["stage"], "score": asgn.get("score")})
     c = candidates_db.get(cid)
     return JSONResponse(c if c else {"error": "not found"})
 
