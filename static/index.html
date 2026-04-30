@@ -95,11 +95,15 @@ textarea{resize:vertical;line-height:1.6;font-family:'JetBrains Mono',monospace;
 .kc-n{font-size:11px;font-weight:500;color:var(--tx);margin-bottom:2px;padding-right:26px}
 .kc-s{font-size:9px;color:var(--tx3);font-family:'JetBrains Mono',monospace}
 .kc-sc{position:absolute;top:.4rem;right:.5rem;font-size:11px;font-weight:700;font-family:'JetBrains Mono',monospace}
-.slide{position:fixed;right:0;top:48px;bottom:0;width:480px;background:var(--bg1);border-left:1px solid var(--bd2);z-index:40;transform:translateX(100%);transition:transform .22s cubic-bezier(.4,0,.2,1);display:flex;flex-direction:column}
+.slide{position:fixed;right:0;top:48px;bottom:0;width:580px;background:var(--bg1);border-left:1px solid var(--bd2);z-index:40;transform:translateX(100%);transition:transform .22s cubic-bezier(.4,0,.2,1);display:flex;flex-direction:column}
 .slide.on{transform:translateX(0)}
 .slide-head{padding:1.1rem 1.25rem;border-bottom:1px solid var(--bd2);flex-shrink:0;display:flex;align-items:flex-start;gap:.75rem}
 .slide-x{background:none;border:none;color:var(--tx3);font-size:16px;cursor:pointer;padding:.25rem;margin-left:auto;line-height:1;flex-shrink:0}
-.slide-body{flex:1;overflow-y:auto;padding:1.1rem 1.25rem}
+.slide-body{flex:1;overflow-y:auto;padding:1.25rem 1.5rem}
+.assess-card{background:var(--bg2);border:1px solid var(--grn-bd);border-radius:10px;padding:1rem 1.25rem;margin:.5rem 0 .85rem}
+.assess-text{font-size:13px;color:var(--tx);line-height:1.9;white-space:pre-wrap;word-break:break-word}
+.iv-transcript-area{width:100%;min-height:120px;background:var(--bg2);border:1px solid var(--bd2);color:var(--tx);font-family:'JetBrains Mono',monospace;font-size:11px;padding:.65rem .85rem;border-radius:7px;outline:none;resize:vertical;line-height:1.6;margin-bottom:.5rem}
+.iv-transcript-area:focus{border-color:var(--grn)}
 .sring{width:60px;height:60px;border-radius:50%;border:2.5px solid var(--bd2);display:flex;align-items:center;justify-content:center;flex-direction:column;flex-shrink:0}
 .sr-n{font-size:18px;font-weight:700;line-height:1;font-family:'JetBrains Mono',monospace}
 .sr-l{font-size:8px;color:var(--tx3);font-family:'JetBrains Mono',monospace}
@@ -573,63 +577,143 @@ function buildSlide(c) {
   var ph = c.phone_interview&&c.phone_interview.score?c.phone_interview.score.overall_score:null;
   var vs = c.video_interview&&c.video_interview.score?c.video_interview.score.overall_score:null;
   var lo = c.assignment&&c.assignment.score?c.assignment.score.content_score:null;
-  var cf = c.assignment?c.assignment.confidence:null;
   var enr = c.enrichment||{};
   var li = enr.linkedin_profile||{};
   var gh = enr.github_profile||{};
 
-  var h = '<div style="display:flex;align-items:center;gap:.85rem;margin-bottom:1rem">';
-  h += '<div class="sring" style="border-color:'+fc+'"><div class="sr-n" style="color:'+fc+'">'+(final||'—')+'</div><div class="sr-l">/100</div></div>';
-  h += '<div><div style="font-size:14px;font-weight:600;color:'+fc+'">'+(c.final_verdict||c.verdict||'In progress')+'</div><div style="font-size:10px;color:var(--tx3);font-family:\'JetBrains Mono\',monospace;margin-top:.1rem">'+c.stage+'</div></div></div>';
+  var h = '';
 
-  h += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:.35rem;margin-bottom:.85rem">';
-  function sbox(l,n){var c2=n>=75?'var(--grn)':n>=50?'var(--amb)':'var(--red)';return '<div style="background:var(--bg2);border-radius:6px;padding:.5rem;text-align:center"><div style="font-size:9px;color:var(--tx3);font-family:\'JetBrains Mono\',monospace;margin-bottom:2px">'+l+'</div><div style="font-size:16px;font-weight:700;font-family:\'JetBrains Mono\',monospace;color:'+(n?c2:'var(--tx3)')+'>'+(n||'—')+'</div></div>';}
+  // ── Header: score ring + verdict + stage
+  h += '<div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem">';
+  h += '<div class="sring" style="border-color:'+fc+';width:68px;height:68px;border-width:3px"><div class="sr-n" style="color:'+fc+';font-size:20px">'+(final||c.score||'—')+'</div><div class="sr-l">/100</div></div>';
+  h += '<div style="flex:1"><div style="font-size:16px;font-weight:700;color:'+fc+'">'+(c.final_verdict||c.verdict||'In Progress')+'</div>';
+  h += '<div style="font-size:10px;color:var(--tx3);font-family:\'JetBrains Mono\',monospace;margin-top:2px">'+c.stage+'</div>';
+  h += '<div style="font-size:11px;color:var(--tx2);margin-top:4px">'+c.email+(c.phone?' &nbsp;·&nbsp; '+c.phone:'')+'</div></div></div>';
+
+  // ── Score grid
+  h += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:.35rem;margin-bottom:1rem">';
+  function sbox(l,n){var c2=n>=75?'var(--grn)':n>=50?'var(--amb)':'var(--red)';return '<div style="background:var(--bg2);border:1px solid var(--bd2);border-radius:7px;padding:.6rem;text-align:center"><div style="font-size:9px;color:var(--tx3);font-family:\'JetBrains Mono\',monospace;margin-bottom:3px;text-transform:uppercase">'+l+'</div><div style="font-size:18px;font-weight:700;font-family:\'JetBrains Mono\',monospace;color:'+(n?c2:'var(--tx3)')+'>'+(n!==null&&n!==undefined?n:'—')+'</div></div>';}
   h += sbox('Resume',c.score)+sbox('Phone',ph)+sbox('Video',vs)+sbox('Loom',lo);
   h += '</div>';
 
-  h += '<div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:.85rem">';
-  if (!c.phone_interview||!c.phone_interview.call_id) h += '<button class="btn btn-sm" onclick="triggerPhone(\''+c.id+'\')">📞 Phone Interview</button>';
-  else if (!c.phone_interview.score) h += '<button class="btn btn-sm btn-c" onclick="checkCall(\''+c.id+'\')">🔄 Check Call</button><button class="btn btn-sm" onclick="pasteTranscript(\''+c.id+'\')">Paste Transcript</button>';
+  // ── Action buttons
+  h += '<div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:1rem">';
+  var hasCall = c.phone_interview&&c.phone_interview.call_id;
+  var hasScore = c.phone_interview&&c.phone_interview.score;
+  if (!hasCall && !hasScore) {
+    h += '<button class="btn btn-sm" onclick="triggerPhone(\''+c.id+'\')">📞 Phone Interview</button>';
+  } else if (hasCall && !hasScore) {
+    h += '<button class="btn btn-sm btn-c" onclick="checkCall(\''+c.id+'\')">🔄 Check Call</button>';
+  }
   h += '<button class="btn btn-sm btn-v" onclick="openIVRoom(\''+c.id+'\',\''+c.name+'\')">🎥 Video Interview</button>';
   if (c.assignment&&c.assignment.loom_url) h += '<a href="'+c.assignment.loom_url+'" target="_blank" class="btn btn-sm" style="text-decoration:none">🎬 Watch Loom</a>';
+  if (c.stage==='ready_for_review'||c.final_score) h += '<button class="btn btn-sm btn-p" onclick="openReviewPopup(\''+c.id+'\');closeSlide()">★ Human Review</button>';
   h += '<button class="btn btn-sm btn-d" onclick="delCand(\''+c.id+'\')">Delete</button>';
   h += '</div>';
 
-  if (c.assessment) { h += '<div class="div"></div><div style="font-size:10px;font-weight:700;color:var(--tx3);text-transform:uppercase;letter-spacing:.08em;font-family:\'JetBrains Mono\',monospace;margin-bottom:.4rem">AI Assessment</div><div style="font-size:12px;color:var(--tx2);line-height:1.75;margin-bottom:.75rem">'+c.assessment+'</div>'; }
+  // ── Transcript paste section (shown when call placed but no score yet)
+  if (hasCall && !hasScore) {
+    h += '<div style="background:var(--bg2);border:1px solid var(--amb-bd);border-radius:9px;padding:1rem;margin-bottom:1rem">';
+    h += '<div style="font-size:10px;font-weight:700;color:var(--amb);text-transform:uppercase;letter-spacing:.08em;font-family:\'JetBrains Mono\',monospace;margin-bottom:.6rem">📋 Paste Call Transcript</div>';
+    h += '<textarea class="iv-transcript-area" id="tr-'+c.id+'" placeholder="Paste the VAPI call transcript here and click Evaluate..."></textarea>';
+    h += '<div style="display:flex;gap:.5rem"><button class="btn btn-p" style="flex:1" onclick="submitTranscript(\''+c.id+'\')">Evaluate Transcript →</button></div>';
+    h += '<div id="tr-result-'+c.id+'" style="margin-top:.5rem;font-size:11px;font-family:\'JetBrains Mono\',monospace;color:var(--tx3)"></div>';
+    h += '</div>';
+  }
 
-  if (li.title) { h += '<div style="background:var(--bg2);border:1px solid var(--bd2);border-radius:7px;padding:.75rem;margin-bottom:.5rem"><div style="font-size:9px;font-weight:700;color:var(--tx3);text-transform:uppercase;letter-spacing:.08em;font-family:\'JetBrains Mono\',monospace;margin-bottom:.4rem">LinkedIn</div><div style="font-size:12px;font-weight:500">'+li.title+(li.company?' at '+li.company:'')+'</div>'+( li.skills&&li.skills.length?'<div style="margin-top:.35rem">'+li.skills.slice(0,8).map(function(s){return '<span class="skill">'+s+'</span>';}).join('')+'</div>':'')+'</div>'; }
-  if (gh.username) { h += '<div style="background:var(--bg2);border:1px solid var(--bd2);border-radius:7px;padding:.75rem;margin-bottom:.5rem"><div style="font-size:9px;font-weight:700;color:var(--tx3);text-transform:uppercase;letter-spacing:.08em;font-family:\'JetBrains Mono\',monospace;margin-bottom:.4rem">GitHub</div><div style="font-size:12px;font-weight:500">@'+gh.username+' · '+( gh.contribution_level||'')+'</div>'+(gh.top_languages&&gh.top_languages.length?'<div style="margin-top:.35rem">'+gh.top_languages.map(function(l){return '<span class="skill">'+l+'</span>';}).join('')+'</div>':'')+'</div>'; }
+  // ── AI Assessment (FULL, readable card)
+  if (c.assessment) {
+    h += '<div class="assess-card">';
+    h += '<div style="font-size:10px;font-weight:700;color:var(--grn);text-transform:uppercase;letter-spacing:.08em;font-family:\'JetBrains Mono\',monospace;margin-bottom:.65rem">🧠 AI Assessment</div>';
+    h += '<div class="assess-text">'+c.assessment+'</div>';
+    // Show dimensions if available
+    if (c.dimensions&&c.dimensions.length) {
+      h += '<div style="margin-top:.85rem;display:grid;grid-template-columns:1fr 1fr;gap:.4rem">';
+      c.dimensions.forEach(function(d){
+        var dc=d.score>=7?'var(--grn)':d.score>=5?'var(--amb)':'var(--red)';
+        h += '<div style="background:var(--bg3);border-radius:6px;padding:.5rem .65rem"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.2rem"><span style="font-size:10px;color:var(--tx2)">'+d.name+'</span><span style="font-size:11px;font-weight:700;color:'+dc+';font-family:\'JetBrains Mono\',monospace">'+d.score+'</span></div><div style="font-size:10px;color:var(--tx3);line-height:1.4">'+( d.note||'')+'</div></div>';
+      });
+      h += '</div>';
+    }
+    h += '</div>';
+  }
 
+  // ── Enrichment: LinkedIn + GitHub
+  if (li.title) {
+    h += '<div style="background:var(--bg2);border:1px solid var(--bd2);border-radius:8px;padding:.85rem;margin-bottom:.5rem">';
+    h += '<div style="font-size:9px;font-weight:700;color:var(--blu);text-transform:uppercase;letter-spacing:.08em;font-family:\'JetBrains Mono\',monospace;margin-bottom:.4rem">LinkedIn</div>';
+    h += '<div style="font-size:12px;font-weight:500">'+li.title+(li.company?' at '+li.company:'')+'</div>';
+    if (li.skills&&li.skills.length) h += '<div style="margin-top:.35rem">'+li.skills.slice(0,10).map(function(s){return '<span class="skill">'+s+'</span>';}).join('')+'</div>';
+    h += '</div>';
+  }
+  if (gh.username) {
+    h += '<div style="background:var(--bg2);border:1px solid var(--bd2);border-radius:8px;padding:.85rem;margin-bottom:.5rem">';
+    h += '<div style="font-size:9px;font-weight:700;color:var(--vio);text-transform:uppercase;letter-spacing:.08em;font-family:\'JetBrains Mono\',monospace;margin-bottom:.4rem">GitHub</div>';
+    h += '<div style="font-size:12px;font-weight:500">@'+gh.username+' · '+(gh.contribution_level||'')+'</div>';
+    if (gh.top_languages&&gh.top_languages.length) h += '<div style="margin-top:.35rem">'+gh.top_languages.map(function(l){return '<span class="skill">'+l+'</span>';}).join('')+'</div>';
+    h += '</div>';
+  }
+
+  // ── Phone Interview section
   if (c.phone_interview&&c.phone_interview.score) {
     var ps2=c.phone_interview.score;
-    h += '<div class="div"></div><div style="font-size:10px;font-weight:700;color:var(--tx3);text-transform:uppercase;letter-spacing:.08em;font-family:\'JetBrains Mono\',monospace;margin-bottom:.4rem">Phone Interview — '+ps2.overall_score+'/100</div>';
-    h += '<div style="font-size:12px;color:var(--tx2);line-height:1.7">'+( ps2.summary||'')+'</div>';
-    if (ps2.key_strengths&&ps2.key_strengths.length) h += '<div style="font-size:11px;color:var(--grn);margin-top:.3rem">'+ps2.key_strengths.join(' · ')+'</div>';
-  }
-  if (c.video_interview&&c.video_interview.score) {
-    var vi2=c.video_interview.score;
-    h += '<div class="div"></div><div style="font-size:10px;font-weight:700;color:var(--tx3);text-transform:uppercase;letter-spacing:.08em;font-family:\'JetBrains Mono\',monospace;margin-bottom:.4rem">Video Interview — '+vi2.overall_score+'/100</div>';
-    h += '<div style="font-size:12px;color:var(--tx2);line-height:1.7">'+( vi2.summary||'')+'</div>';
-  }
-  if (c.assignment&&c.assignment.score) {
-    var ls2=c.assignment.score;
-    h += '<div class="div"></div><div class="alert al-a"><span>⚠</span><div>Loom: transcript analysis only — watch video before deciding</div></div>';
-    if (ls2.what_they_built) h += '<div style="font-size:12px;color:var(--tx2);margin-bottom:.3rem"><strong style="color:var(--tx)">Built:</strong> '+ls2.what_they_built+'</div>';
-    if (ls2.summary) h += '<div style="font-size:12px;color:var(--tx2)">'+ls2.summary+'</div>';
+    h += '<div class="div"></div>';
+    h += '<div style="background:var(--bg2);border:1px solid var(--vio-bd);border-radius:9px;padding:1rem;margin-bottom:.65rem">';
+    h += '<div style="font-size:10px;font-weight:700;color:var(--vio);text-transform:uppercase;letter-spacing:.08em;font-family:\'JetBrains Mono\',monospace;margin-bottom:.5rem">📞 Phone Interview — '+ps2.overall_score+'/100 — '+ps2.verdict+'</div>';
+    h += '<div style="font-size:13px;color:var(--tx);line-height:1.8;margin-bottom:.5rem">'+( ps2.summary||'')+'</div>';
+    if (ps2.key_strengths&&ps2.key_strengths.length) h += '<div style="font-size:11px;color:var(--grn);margin-bottom:.2rem">✓ '+ps2.key_strengths.join(' · ')+'</div>';
+    if (ps2.concerns&&ps2.concerns.length) h += '<div style="font-size:11px;color:var(--amb)">⚠ '+ps2.concerns.join(' · ')+'</div>';
+    if (ps2.dimensions&&ps2.dimensions.length) {
+      h += '<div style="margin-top:.7rem;display:grid;grid-template-columns:1fr 1fr;gap:.35rem">';
+      ps2.dimensions.forEach(function(d){var dc=d.score>=7?'var(--grn)':d.score>=5?'var(--amb)':'var(--red)';h+='<div style="background:var(--bg3);border-radius:5px;padding:.4rem .6rem;font-size:10px"><span style="color:var(--tx3)">'+d.name+'</span> <span style="color:'+dc+';font-weight:700;font-family:\'JetBrains Mono\',monospace">'+d.score+'/10</span></div>';});
+      h += '</div>';
+    }
+    h += '</div>';
   }
 
-  h += '<div class="div"></div><div style="font-size:9px;font-weight:700;color:var(--tx3);text-transform:uppercase;letter-spacing:.08em;font-family:\'JetBrains Mono\',monospace;margin-bottom:.4rem">Event Log</div>';
+  // ── Video Interview section
+  if (c.video_interview&&c.video_interview.score) {
+    var vi2=c.video_interview.score;
+    h += '<div style="background:var(--bg2);border:1px solid var(--blu-bd);border-radius:9px;padding:1rem;margin-bottom:.65rem">';
+    h += '<div style="font-size:10px;font-weight:700;color:var(--blu);text-transform:uppercase;letter-spacing:.08em;font-family:\'JetBrains Mono\',monospace;margin-bottom:.5rem">🎥 Video Interview — '+vi2.overall_score+'/100 — '+vi2.verdict+'</div>';
+    h += '<div style="font-size:13px;color:var(--tx);line-height:1.8;margin-bottom:.5rem">'+( vi2.summary||'')+'</div>';
+    if (vi2.key_strengths&&vi2.key_strengths.length) h += '<div style="font-size:11px;color:var(--grn);margin-bottom:.2rem">✓ '+vi2.key_strengths.join(' · ')+'</div>';
+    if (vi2.standout_answer) h += '<div style="font-size:11px;color:var(--tx2);margin-top:.3rem;padding:.5rem .65rem;background:var(--bg3);border-radius:5px;line-height:1.5"><em>Best answer: '+vi2.standout_answer+'</em></div>';
+    h += '</div>';
+  }
+
+  // ── Loom Assignment section
+  if (c.assignment&&c.assignment.score) {
+    var ls2=c.assignment.score;
+    h += '<div style="background:var(--bg2);border:1px solid var(--cyn-bd);border-radius:9px;padding:1rem;margin-bottom:.65rem">';
+    h += '<div style="font-size:10px;font-weight:700;color:var(--cyn);text-transform:uppercase;letter-spacing:.08em;font-family:\'JetBrains Mono\',monospace;margin-bottom:.5rem">🎬 Loom Assignment — '+(ls2.content_score||'—')+'/100</div>';
+    h += '<div class="alert al-a" style="margin-bottom:.5rem"><span>⚠</span><div>Transcript analysis only — always watch the Loom before deciding</div></div>';
+    if (ls2.what_they_built) h += '<div style="font-size:13px;color:var(--tx);margin-bottom:.4rem"><strong>Built:</strong> '+ls2.what_they_built+'</div>';
+    if (ls2.summary) h += '<div style="font-size:12px;color:var(--tx2);line-height:1.7">'+ls2.summary+'</div>';
+    if (c.assignment.loom_url) h += '<a href="'+c.assignment.loom_url+'" target="_blank" style="display:inline-flex;align-items:center;gap:.3rem;font-size:11px;color:var(--cyn);margin-top:.5rem;text-decoration:none">🎬 Watch Loom Video ↗</a>';
+    h += '</div>';
+  }
+
+  // ── Event Log
+  h += '<div class="div"></div>';
+  h += '<div style="font-size:9px;font-weight:700;color:var(--tx3);text-transform:uppercase;letter-spacing:.08em;font-family:\'JetBrains Mono\',monospace;margin-bottom:.4rem">Event Log</div>';
   h += '<div class="evlog">'+(c.events||[]).slice().reverse().map(function(e){return '<div class="ev"><span class="ev-t">'+new Date(e.time).toLocaleTimeString()+'</span><span class="ev-e">'+e.event+'</span></div>';}).join('')+'</div>';
 
   document.getElementById('sl-body').innerHTML = h;
 }
 
 async function triggerPhone(cid) {
-  var p = prompt('Phone number to call:', cands[cid]&&cands[cid].phone||'');
+  var p = prompt('Phone number to call (with country code e.g. +14155550198):', cands[cid]&&cands[cid].phone||'');
   if (!p) return;
   var r = await req('/api/pipeline/phone/start','POST',{candidate_id:cid,phone:p});
-  if (r.call_id) { alert('Call placed! Alex is calling '+p+'\n\nAnswer the phone — Alex will conduct the interview.\nTranscript auto-processed when call ends.'); await refCand(cid); }
-  else { alert('VAPI Error: '+(r.error||JSON.stringify(r))); }
+  if (r.call_id) {
+    alert('✓ Call placed!\nAlex is calling ' + p + '\n\nCall ID: ' + r.call_id + '\n\nAnswer the phone — the transcript will be auto-analyzed when the call ends (30s poller).\n\nOr paste the transcript manually in the candidate panel.');
+    await refCand(cid);
+    buildSlide(cands[cid]);
+  } else {
+    var errDetail = r.vapi_response ? JSON.stringify(r.vapi_response).slice(0,300) : '';
+    alert('VAPI Error: ' + (r.error||'unknown') + '\n\n' + errDetail + '\n\nCheck /api/vapi/debug for assistant config.');
+  }
 }
 
 async function checkCall(cid) {
@@ -640,12 +724,41 @@ async function checkCall(cid) {
   await refCand(cid);
 }
 
-function pasteTranscript(cid) {
-  var tr = prompt('Paste call transcript:');
-  if (!tr) return;
-  req('/api/pipeline/phone/analyze','POST',{candidate_id:cid,transcript:tr}).then(function(){
-    setTimeout(function(){refCand(cid);},3000);
-  });
+async function submitTranscript(cid) {
+  var ta = document.getElementById('tr-'+cid);
+  var msg = document.getElementById('tr-result-'+cid);
+  if (!ta) return;
+  var tr = ta.value.trim();
+  if (!tr || tr.length < 20) { if(msg) msg.textContent='Paste a real transcript first.'; return; }
+  if(msg) msg.textContent = '⏳ Sending to Claude for analysis...';
+  ta.disabled = true;
+  try {
+    var r = await req('/api/pipeline/phone/analyze','POST',{candidate_id:cid,transcript:tr});
+    if(msg) msg.textContent = 'Analyzing... results in ~5 seconds';
+    // Poll for result
+    var tries = 0;
+    var poll = setInterval(async function(){
+      tries++;
+      var c = await req('/api/candidate/'+cid);
+      cands[cid] = c;
+      if (c.phone_interview&&c.phone_interview.score) {
+        clearInterval(poll);
+        var sc = c.phone_interview.score;
+        var col = sc.overall_score>=65?'var(--grn)':'var(--red)';
+        if(msg) {
+          msg.style.color = col;
+          msg.textContent = '✓ Score: '+sc.overall_score+'/100 — '+sc.verdict+(c.stage==='assignment_sent'?' → Assignment email sent!':c.stage.includes('reject')?' → Rejected':'');
+        }
+        buildSlide(c); renderDash(); updateBadges();
+      } else if (tries > 15) {
+        clearInterval(poll);
+        if(msg) msg.textContent = 'Analysis timed out — refresh and check.';
+      }
+    }, 2000);
+  } catch(e) {
+    if(msg) msg.textContent = 'Error: '+e.message;
+    ta.disabled = false;
+  }
 }
 
 async function delCand(cid) {
