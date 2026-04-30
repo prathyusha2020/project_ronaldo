@@ -74,10 +74,56 @@ async def _poll_active_calls():
             except Exception as e:
                 print(f"[POLLER] error for {cid}: {e}")
 
+
+async def _poll_inbox_for_looms():
+    """Background task — checks Gmail every 5 min for Loom submissions from candidates in assignment_sent stage."""
+    await asyncio.sleep(60)  # Wait 1 min after startup
+    while True:
+        try:
+            waiting = [cid for cid, c in candidates_db.items() if c.get("stage") == "assignment_sent"]
+            if waiting:
+                print(f"[INBOX POLLER] Checking inbox for {len(waiting)} candidates awaiting Loom...")
+                response = await ask_claude(
+                    f"You are monitoring the Gmail inbox for {AI_EMAIL} as part of an AI hiring system.",
+                    """Read the inbox and find any emails from candidates that contain a Loom video link (loom.com/share).
+For each such email, extract:
+- from: sender email address
+- loom_url: the full loom.com/share URL
+
+Return a JSON array only, no other text:
+[{"from": "candidate@email.com", "loom_url": "https://www.loom.com/share/abc123"}]
+
+If no Loom links found, return: []""",
+                    max_tokens=800, mcp_servers=[GMAIL_MCP]
+                )
+                import re as _re
+                match = _re.search(r"\[.*?\]", response, _re.DOTALL)
+                submissions = json.loads(match.group(0)) if match else []
+                for sub in submissions:
+                    sender = sub.get("from", "").lower()
+                    loom_url = sub.get("loom_url", "")
+                    if not loom_url:
+                        continue
+                    for cid, cand in candidates_db.items():
+                        if (cand.get("email","").lower() == sender and
+                                cand.get("stage") == "assignment_sent" and
+                                not cand.get("assignment",{}).get("loom_url")):
+                            cand["assignment"]["loom_url"] = loom_url
+                            cand["stage"] = "loom_submitted"
+                            add_event(cid, f"[AUTO] Loom found in inbox: {loom_url}")
+                            asyncio.create_task(_analyze_loom(cid, loom_url))
+                            print(f"[INBOX POLLER] Found Loom for {cand['name']}: {loom_url}")
+        except Exception as e:
+            print(f"[INBOX POLLER] error: {e}")
+        await asyncio.sleep(300)  # 5 minutes
+
+
 @app.on_event("startup")
 async def startup():
     asyncio.create_task(_poll_active_calls())
-    print("[STARTUP] Auto-poller started — checks active VAPI calls every 30s")
+    asyncio.create_task(_poll_inbox_for_looms())
+    print("[STARTUP] VAPI call poller started (every 30s)")
+    print("[STARTUP] Inbox Loom poller started (every 5 min)")
 settings_db = {
     "company": "Click Theory Capital",
     "role": "AI/ML Engineer",
@@ -384,21 +430,12 @@ async def start_phone(request: Request, background_tasks: BackgroundTasks):
         },
         "assistantId": VAPI_ASSISTANT_ID,
         "assistantOverrides": {
-            # NOTE: Do NOT override model here — it causes instant call drop.
-            # The assistant already has a model configured in VAPI dashboard.
-            # Only override firstMessage, voice settings, and timing.
-            "firstMessage": f"Hi, is this {cand['name']}? This is Alex calling from Click Theory Capital — I'm reaching out about the {settings_db['role']} position you applied for. Do you have about 15 minutes for a quick phone screen?",
-            "endCallMessage": f"Wonderful, thank you so much {cand['name']}! We will be in touch within 48 hours with next steps. Have a fantastic rest of your day!",
-            "maxDurationSeconds": 960,
-            "silenceTimeoutSeconds": 20,
-            "backgroundSound": "off",
-            "backchannelingEnabled": True,
-            "endCallPhrases": ["have a great day", "goodbye", "take care", "talk soon", "bye bye", "thank you goodbye"]
+            "firstMessage": f"Hi, is this {cand['name']}? This is Alex calling from Click Theory Capital — I'm reaching out about the {settings_db['role']} position you applied for. Do you have about 15 minutes for a quick phone screen?"
         },
         "metadata": {"candidate_id": cid, "stage": "phone"}
     }
 
-    print(f"[VAPI] Placing call to {phone} — phoneNumberId={VAPI_PHONE_ID} assistantId={VAPI_ASSISTANT_ID}")
+    print(f"[VAPI] Placing call to {phone} — payload: {json.dumps(vapi_payload)}")
 
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
@@ -667,7 +704,7 @@ async def interview_tts(request: Request):
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
-                "https://api.elevenlabs.io/v1/text-to-speech/pNInz6obpgDQGcFmaJgB",
+                "https://api.elevenlabs.io/v1/text-to-speech/N2lVS1w4EtoT3dr4eOWO",
                 headers={"xi-api-key": ELEVENLABS_KEY, "Content-Type": "application/json"},
                 json={"text": text, "model_id": "eleven_turbo_v2",
                       "voice_settings": {"stability": 0.35, "similarity_boost": 0.80,
@@ -720,6 +757,26 @@ async def vapi_webhook(request: Request, background_tasks: BackgroundTasks):
                 add_event(cid, "WARNING: No transcript received from VAPI")
 
     return JSONResponse({"received": True})
+
+
+@app.get("/api/vapi/debug")
+async def vapi_debug():
+    """Fetch VAPI assistant + phone number details for debugging"""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            asst = await client.get(f"https://api.vapi.ai/assistant/{VAPI_ASSISTANT_ID}",
+                                    headers={"Authorization": f"Bearer {VAPI_KEY}"})
+            phone = await client.get(f"https://api.vapi.ai/phone-number/{VAPI_PHONE_ID}",
+                                     headers={"Authorization": f"Bearer {VAPI_KEY}"})
+            calls = await client.get("https://api.vapi.ai/call?limit=5",
+                                     headers={"Authorization": f"Bearer {VAPI_KEY}"})
+        return JSONResponse({
+            "assistant": asst.json(),
+            "phone_number": phone.json(),
+            "recent_calls": calls.json()
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @app.get("/api/pipeline/phone/status/{call_id}")
@@ -1175,8 +1232,8 @@ async def test_calendar():
 # ══════════════════════════════════════════════════════════════════
 
 ELEVENLABS_KEY = os.getenv("ELEVENLABS_API_KEY", "")
-# Adam — warm, cheerful, professional male voice
-ELEVENLABS_VOICE = "pNInz6obpgDQGcFmaJgB"
+# Elliot — energetic, cheerful, professional male voice
+ELEVENLABS_VOICE = "N2lVS1w4EtoT3dr4eOWO"
 
 # Interview questions per stage
 IV_QUESTIONS = [
