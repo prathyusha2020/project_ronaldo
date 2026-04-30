@@ -998,7 +998,7 @@ function buildSlide(c) {
     h += '<div style="display:flex;gap:.4rem;margin-bottom:.55rem">';
     h += '<input type="text" id="loom-url-'+c.id+'" placeholder="https://www.loom.com/share/..." ';
     h += 'style="flex:1;background:var(--bg3);border:1px solid var(--bd2);color:var(--tx);font-size:12px;padding:.5rem .75rem;border-radius:6px;outline:none;font-family:\'Inter\',sans-serif" ';
-    h += 'value="'+(hasLoom?c.assignment.loom_url:'')+'" oninput="this.style.borderColor=this.value.includes(\'loom.com\')?\'var(--grn)\':\\'var(--bd2)\\'">';
+    h += 'value="'+(hasLoom?c.assignment.loom_url:'')+'">';
     h += '<button class="btn btn-p" onclick="analyzeLoom(\''+c.id+'\')" style="white-space:nowrap;padding:.5rem .85rem;font-size:12px">🤖 Analyze →</button>';
     h += '</div>';
 
