@@ -171,8 +171,8 @@ textarea{resize:vertical;line-height:1.6;font-family:'JetBrains Mono',monospace;
 <!-- TOPBAR -->
 <div class="topbar">
   <div class="logo">
-    <div class="logo-mark">R</div>
-    <div><div class="logo-name">Project Ronaldo</div><div class="logo-tag">Click Theory Capital · AI Hiring OS</div></div>
+    <div class="logo-mark" id="logo-mark">C</div>
+    <div><div class="logo-name" id="logo-company">Click Theory Capital</div><div class="logo-tag">AI Hiring OS</div></div>
   </div>
   <div class="alive"><span class="alive-dot"></span>prathyusha.hyra@gmail.com</div>
   <div class="tb-r">
@@ -185,15 +185,19 @@ textarea{resize:vertical;line-height:1.6;font-family:'JetBrains Mono',monospace;
 <div class="sidebar">
   <div class="sb-group">Pipeline</div>
   <div class="nav on" onclick="gv('dash',this)"><span class="nav-ic">⬡</span>Dashboard<span class="nbadge" id="nb-t">0</span></div>
-  <div class="nav" onclick="gv('intake',this)"><span class="nav-ic">+</span>New Candidate</div>
+  <div class="nav" onclick="gv('intake',this);loadJobsDropdown()"><span class="nav-ic">+</span>New Candidate</div>
   <div class="nav" onclick="gv('cands',this)"><span class="nav-ic">⬢</span>All Candidates<span class="nbadge" id="nb-a">0</span></div>
-  <div class="nav" onclick="gv('review',this)"><span class="nav-ic">★</span>Human Review<span class="nbadge" id="nb-r">0</span></div>
+  <div class="nav" onclick="gv('review',this);renderReview()"><span class="nav-ic">★</span>Human Review<span class="nbadge" id="nb-r">0</span></div>
+  <div class="sb-div"></div>
+  <div class="sb-group">Configuration</div>
+  <div class="nav" onclick="gv('jobs',this);renderJobs()"><span class="nav-ic">💼</span>Job Descriptions<span class="nbadge" id="nb-j">0</span></div>
+  <div class="nav" onclick="gv('settings',this);loadSettings()"><span class="nav-ic">⚙</span>Settings</div>
   <div class="sb-div"></div>
   <div class="sb-group">Tools</div>
   <div class="nav" onclick="gv('interview',this)"><span class="nav-ic">🎙</span>Video Interview Room</div>
   <div class="nav" onclick="gv('templates',this);loadTemplates();checkGmailStatus()"><span class="nav-ic">✉</span>Email Templates</div>
   <div class="nav" onclick="gv('integrations',this)"><span class="nav-ic">⊕</span>Integrations</div>
-  <div class="sb-foot"><div class="sb-chip">prathyusha.hyra@gmail.com</div></div>
+  <div class="sb-foot"><div class="sb-chip" id="sb-email-chip">prathyusha.hyra@gmail.com</div></div>
 </div>
 
 <!-- MAIN -->
@@ -227,13 +231,21 @@ textarea{resize:vertical;line-height:1.6;font-family:'JetBrains Mono',monospace;
 <!-- INTAKE -->
 <div class="view" id="v-intake">
   <div class="vhead">
-    <div class="vhead-info"><div class="vh-title">New Candidate</div><div class="vh-sub">Upload resume → AI builds intelligence profile → auto-advances pipeline</div></div>
+    <div class="vhead-info"><div class="vh-title">New Candidate</div><div class="vh-sub">Select a job → upload resume → AI screens against that role's criteria</div></div>
   </div>
   <div class="vbody">
     <div class="two">
       <div>
         <div class="card">
-          <div class="ctitle">Resume</div>
+          <div class="ctitle">Job Role</div>
+          <div class="field" style="margin-bottom:.65rem">
+            <label>Applying For</label>
+            <select id="ijob" style="font-size:13px;padding:.6rem .8rem;border-radius:7px;font-family:'Inter',sans-serif">
+              <option value="">Loading jobs...</option>
+            </select>
+          </div>
+          <div id="ijob-preview" style="display:none;background:var(--bg2);border:1px solid var(--bd2);border-radius:7px;padding:.75rem;margin-bottom:.65rem;font-size:11px;color:var(--tx3);line-height:1.6"></div>
+          <div class="ctitle" style="margin-top:.5rem">Resume</div>
           <div class="uz" id="uz" onclick="document.getElementById('fi').click()"
             ondragover="event.preventDefault();this.classList.add('over')"
             ondragleave="this.classList.remove('over')" ondrop="onDrop(event)">
@@ -243,7 +255,7 @@ textarea{resize:vertical;line-height:1.6;font-family:'JetBrains Mono',monospace;
             <div style="font-size:11px;color:var(--tx3);margin-top:.2rem">or click to browse</div>
           </div>
           <div style="text-align:center;margin:.5rem 0;font-size:10px;color:var(--tx3)">— or paste text —</div>
-          <textarea id="rtxt" rows="6" placeholder="Paste resume text here..."></textarea>
+          <textarea id="rtxt" rows="5" placeholder="Paste resume text here..."></textarea>
           <div class="two" style="margin-top:.5rem">
             <div class="field" style="margin-bottom:0"><label>Full Name</label><input type="text" id="iname" placeholder="Jane Smith"/></div>
             <div class="field" style="margin-bottom:0"><label>Phone (AI interview)</label><input type="tel" id="iphone" placeholder="+15550001234"/></div>
@@ -424,6 +436,74 @@ textarea{resize:vertical;line-height:1.6;font-family:'JetBrains Mono',monospace;
   </div>
 </div>
 
+<!-- JOBS -->
+<div class="view" id="v-jobs">
+  <div class="vhead">
+    <div class="vhead-info"><div class="vh-title">Job Descriptions</div><div class="vh-sub">Each job has its own screening criteria · select at upload time</div></div>
+    <div class="vhead-r"><button class="btn btn-p" onclick="openJobEditor(null)">+ New Job</button></div>
+  </div>
+  <div class="vbody">
+    <div id="jobs-list"></div>
+    <div id="jobs-empty" style="text-align:center;padding:3rem;color:var(--tx3)">
+      <div style="font-size:28px;margin-bottom:.5rem">💼</div>
+      <div style="font-size:13px;font-weight:500">No jobs yet</div>
+      <div style="font-size:12px;margin-top:.3rem">Click "+ New Job" to create your first job description</div>
+    </div>
+  </div>
+</div>
+
+<!-- JOB EDITOR POPUP -->
+<div class="popup-bg" id="job-popup">
+  <div class="popup" style="max-width:680px;width:96vw">
+    <button class="popup-x" onclick="closeJobPopup()">✕</button>
+    <div style="font-size:16px;font-weight:700;margin-bottom:1.1rem" id="job-popup-title">New Job</div>
+    <input type="hidden" id="jp-id"/>
+    <div class="two">
+      <div class="field"><label>Job Title</label><input type="text" id="jp-title" placeholder="e.g. Senior AI Engineer"/></div>
+      <div class="field"><label>Department</label><input type="text" id="jp-dept" placeholder="e.g. Engineering"/></div>
+    </div>
+    <div class="field"><label>Job Description / Summary</label><textarea id="jp-desc" rows="4" style="font-family:'Inter',sans-serif;font-size:12px;line-height:1.65" placeholder="Describe the role, responsibilities, team..."></textarea></div>
+    <div class="field"><label>Screening Criteria <span style="color:var(--tx3);font-weight:400">(what Claude looks for in resumes)</span></label><textarea id="jp-criteria" rows="3" style="font-family:'Inter',sans-serif;font-size:12px;line-height:1.65" placeholder="e.g. 3+ years Python, LLM API experience, production AI deployment..."></textarea></div>
+    <div class="two">
+      <div class="field"><label>Must-Have Skills</label><textarea id="jp-must" rows="2" style="font-family:'Inter',sans-serif;font-size:12px" placeholder="e.g. Production AI systems, LLM API hands-on..."></textarea></div>
+      <div class="field"><label>Red Flags</label><textarea id="jp-flags" rows="2" style="font-family:'Inter',sans-serif;font-size:12px" placeholder="e.g. Tutorial-only experience, no production systems..."></textarea></div>
+    </div>
+    <div class="field"><label>Minimum Score Threshold <span style="color:var(--tx3);font-weight:400">(0-100 — candidates below this are auto-rejected)</span></label><input type="number" id="jp-thresh" min="0" max="100" value="65" style="width:100px"/></div>
+    <div style="display:flex;gap:.5rem;align-items:center;margin-top:.5rem">
+      <button class="btn btn-p" style="flex:1" onclick="saveJob()">💾 Save Job</button>
+      <button class="btn" onclick="closeJobPopup()">Cancel</button>
+      <span id="jp-result" style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--tx3)"></span>
+    </div>
+  </div>
+</div>
+
+<!-- SETTINGS -->
+<div class="view" id="v-settings">
+  <div class="vhead">
+    <div class="vhead-info"><div class="vh-title">Settings</div><div class="vh-sub">Company info, branding, pipeline configuration</div></div>
+    <div class="vhead-r"><button class="btn btn-p" onclick="saveSettings()">💾 Save Settings</button></div>
+  </div>
+  <div class="vbody">
+    <div class="card">
+      <div class="ctitle">Company Branding</div>
+      <div class="two">
+        <div class="field"><label>Company Name <span style="color:var(--tx3);font-weight:400">(shown in header and emails)</span></label><input type="text" id="s-company" placeholder="Click Theory Capital"/></div>
+        <div class="field"><label>Recruiter Name <span style="color:var(--tx3);font-weight:400">(AI interviewer name)</span></label><input type="text" id="s-recruiter" placeholder="Alex"/></div>
+      </div>
+      <div class="two">
+        <div class="field"><label>Reviewer Email <span style="color:var(--tx3);font-weight:400">(receives consolidated reports)</span></label><input type="email" id="s-reviewer" placeholder="prathyusha.hyra@gmail.com"/></div>
+        <div class="field"><label>Sender Email <span style="color:var(--tx3);font-weight:400">(Gmail account sending emails)</span></label><input type="email" id="s-sender" placeholder="prathyusha.hyra@gmail.com"/></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="ctitle">Pipeline Configuration</div>
+      <div class="field"><label>Phone Interview Script Template</label><textarea id="s-phone" rows="8" style="font-family:'JetBrains Mono',monospace;font-size:11px"></textarea></div>
+      <div class="field"><label>Technical Assignment Description</label><textarea id="s-assign" rows="6" style="font-family:'JetBrains Mono',monospace;font-size:11px"></textarea></div>
+    </div>
+    <div id="s-saved" style="font-size:11px;color:var(--grn);font-family:'JetBrains Mono',monospace;opacity:0;transition:opacity .3s;text-align:center">✓ Settings saved</div>
+  </div>
+</div>
+
 <!-- INTEGRATIONS -->
 <div class="view" id="v-integrations">
   <div class="vhead"><div class="vhead-info"><div class="vh-title">Integrations</div><div class="vh-sub">Connected services and roadmap</div></div></div>
@@ -559,14 +639,160 @@ function loadDemo() {
 }
 
 // ── PROCESS ───────────────────────────────────────────────────────
+// ── JOBS ──────────────────────────────────────────────────────────
+var jobsData = {};
+
+async function loadJobsDropdown() {
+  try {
+    var jobs = await req('/api/jobs');
+    jobsData = {};
+    jobs.forEach(function(j){ jobsData[j.id]=j; });
+    var sel = document.getElementById('ijob');
+    if (!sel) return;
+    sel.innerHTML = jobs.length
+      ? jobs.map(function(j){ return '<option value="'+j.id+'">'+j.title+(j.dept?' — '+j.dept:'')+'</option>'; }).join('')
+      : '<option value="">No jobs — create one in Job Descriptions</option>';
+    sel.onchange = function(){ showJobPreview(sel.value); };
+    if (jobs.length) showJobPreview(jobs[0].id);
+    var badge = document.getElementById('nb-j');
+    if (badge) badge.textContent = jobs.length;
+  } catch(e) { console.error('loadJobsDropdown', e); }
+}
+
+function showJobPreview(jid) {
+  var j = jobsData[jid]; var el = document.getElementById('ijob-preview');
+  if (!j||!el) return;
+  el.style.display='block';
+  el.innerHTML = '<strong style="color:var(--tx);font-size:12px">'+j.title+'</strong>'+(j.dept?' <span style="color:var(--tx3)">· '+j.dept+'</span>':'')+'<br>'+
+    (j.description?'<span style="color:var(--tx2)">'+j.description+'</span><br>':'') +
+    '<span style="color:var(--amb)">Must-have: '+j.mustHave+'</span>';
+}
+
+function renderJobs() {
+  req('/api/jobs').then(function(jobs) {
+    jobsData = {};
+    jobs.forEach(function(j){ jobsData[j.id]=j; });
+    var el = document.getElementById('jobs-list');
+    var empty = document.getElementById('jobs-empty');
+    if (!jobs.length) { if(el) el.innerHTML=''; if(empty) empty.style.display='block'; return; }
+    if(empty) empty.style.display='none';
+    if(el) el.innerHTML = jobs.map(function(j){
+      return '<div style="background:var(--bg1);border:1px solid var(--bd2);border-radius:10px;padding:1.1rem;margin-bottom:.65rem">'+
+        '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:.5rem">'+
+          '<div>'+
+            '<span style="font-size:14px;font-weight:700">'+j.title+'</span>'+
+            (j.dept?'<span style="font-size:11px;color:var(--tx3);margin-left:.5rem">'+j.dept+'</span>':'')+
+            '<div style="font-size:11px;color:var(--tx3);font-family:\'JetBrains Mono\',monospace;margin-top:2px">Threshold: '+j.threshold+'/100</div>'+
+          '</div>'+
+          '<div style="display:flex;gap:.4rem">'+
+            '<button class="btn btn-sm" onclick="openJobEditor(\''+j.id+'\')">✎ Edit</button>'+
+            '<button class="btn btn-sm btn-d" onclick="deleteJob(\''+j.id+'\')">Delete</button>'+
+          '</div>'+
+        '</div>'+
+        (j.description?'<div style="font-size:12px;color:var(--tx2);line-height:1.65;margin-bottom:.4rem">'+j.description+'</div>':'')+
+        '<div style="font-size:11px;color:var(--grn);margin-bottom:.2rem">✓ Must-have: '+j.mustHave+'</div>'+
+        '<div style="font-size:11px;color:var(--red)">✗ Red flags: '+j.redFlags+'</div>'+
+      '</div>';
+    }).join('');
+    var badge = document.getElementById('nb-j');
+    if (badge) badge.textContent = jobs.length;
+  });
+}
+
+function openJobEditor(jid) {
+  var j = jid ? jobsData[jid] : null;
+  document.getElementById('job-popup-title').textContent = j ? 'Edit: '+j.title : 'New Job';
+  document.getElementById('jp-id').value = jid||'';
+  document.getElementById('jp-title').value = j?j.title:'';
+  document.getElementById('jp-dept').value = j?j.dept:'';
+  document.getElementById('jp-desc').value = j?j.description:'';
+  document.getElementById('jp-criteria').value = j?j.criteria:'';
+  document.getElementById('jp-must').value = j?j.mustHave:'';
+  document.getElementById('jp-flags').value = j?j.redFlags:'';
+  document.getElementById('jp-thresh').value = j?j.threshold:65;
+  document.getElementById('jp-result').textContent='';
+  document.getElementById('job-popup').classList.add('on');
+}
+
+function closeJobPopup() { document.getElementById('job-popup').classList.remove('on'); }
+
+async function saveJob() {
+  var jid = document.getElementById('jp-id').value;
+  var data = {
+    id: jid||undefined,
+    title:       document.getElementById('jp-title').value.trim(),
+    dept:        document.getElementById('jp-dept').value.trim(),
+    description: document.getElementById('jp-desc').value.trim(),
+    criteria:    document.getElementById('jp-criteria').value.trim(),
+    mustHave:    document.getElementById('jp-must').value.trim(),
+    redFlags:    document.getElementById('jp-flags').value.trim(),
+    threshold:   parseInt(document.getElementById('jp-thresh').value)||65,
+  };
+  if (!data.title) { document.getElementById('jp-result').textContent='Title required'; return; }
+  var r;
+  if (jid) r = await req('/api/job/'+jid,'PUT',data);
+  else r = await req('/api/jobs','POST',data);
+  if (r.ok) {
+    document.getElementById('jp-result').style.color='var(--grn)';
+    document.getElementById('jp-result').textContent='✓ Saved';
+    setTimeout(function(){ closeJobPopup(); renderJobs(); loadJobsDropdown(); },800);
+  }
+}
+
+async function deleteJob(jid) {
+  if (!confirm('Delete this job?')) return;
+  await req('/api/job/'+jid,'DELETE');
+  renderJobs(); loadJobsDropdown();
+}
+
+// ── SETTINGS ──────────────────────────────────────────────────────
+async function loadSettings() {
+  try {
+    var s = await req('/api/settings');
+    document.getElementById('s-company').value  = s.company||'';
+    document.getElementById('s-recruiter').value= s.recruiter_name||'';
+    document.getElementById('s-reviewer').value = s.reviewer_email||s.reviewer||'';
+    document.getElementById('s-sender').value   = s.sender_email||'';
+    document.getElementById('s-phone').value    = s.phone_script||'';
+    document.getElementById('s-assign').value   = s.assignment_template||'';
+  } catch(e) {}
+}
+
+async function saveSettings() {
+  var data = {
+    company:           document.getElementById('s-company').value.trim(),
+    recruiter_name:    document.getElementById('s-recruiter').value.trim(),
+    reviewer_email:    document.getElementById('s-reviewer').value.trim(),
+    sender_email:      document.getElementById('s-sender').value.trim(),
+    phone_script:      document.getElementById('s-phone').value,
+    assignment_template: document.getElementById('s-assign').value,
+  };
+  var r = await req('/api/settings','POST',data);
+  if (r.ok) {
+    // Update header branding live
+    var nm = document.getElementById('logo-company');
+    var mk = document.getElementById('logo-mark');
+    if (nm) nm.textContent = data.company;
+    if (mk) mk.textContent = (data.company||'C')[0].toUpperCase();
+    var chip = document.getElementById('sb-email-chip');
+    if (chip && data.sender_email) chip.textContent = data.sender_email;
+    var el = document.getElementById('s-saved');
+    if (el) { el.style.opacity='1'; setTimeout(function(){ el.style.opacity='0'; },2000); }
+  }
+}
+
 async function processCandidate() {
   var txt = document.getElementById('rtxt').value.trim();
   var phone = document.getElementById('iphone').value.trim();
+  var jobId = document.getElementById('ijob') ? document.getElementById('ijob').value : '';
   if (!txt) { alert('Add resume first'); return; }
+  if (!jobId) { alert('Please select a job role first'); return; }
   document.getElementById('ilog').innerHTML = '';
   lg('Starting...', 'var(--tx)');
+  var jobName = jobsData[jobId] ? jobsData[jobId].title : 'selected role';
+  lg('Screening against: '+jobName, 'var(--cyn)');
   lg('AI screening resume...', 'var(--tx)');
-  var sc = await req('/api/screen', 'POST', { resume: txt });
+  var sc = await req('/api/screen', 'POST', { resume: txt, job_id: jobId });
   if (sc.error) { lg('Screen error: ' + sc.error, 'var(--red)'); return; }
   var col = sc.score >= 75 ? 'var(--grn)' : sc.score >= 50 ? 'var(--amb)' : 'var(--red)';
   lg(sc.name + ' — ' + sc.score + '/100 — ' + sc.verdict, col);
@@ -578,15 +804,17 @@ async function processCandidate() {
     email: sc.email || '', phone: sc.phone || phone,
     linkedin: sc.linkedin || '', github: sc.github || '',
     resume_text: txt, score: sc.score, verdict: sc.verdict || '',
-    assessment: sc.assessment || '', dimensions: sc.dimensions || [], enrichment: en
+    assessment: sc.assessment || '', dimensions: sc.dimensions || [],
+    enrichment: en, job_id: jobId, role: sc.role || jobName
   });
   var cid = rg.candidate_id;
   cands[cid] = rg.candidate;
   updateBadges(); renderDash();
   lg('Registered — ' + cid, 'var(--grn)');
   var p = sc.phone || phone;
-  if (sc.score >= 70 && p) {
-    lg('Score >= 70 — starting phone interview...', 'var(--grn)');
+  var threshold = jobsData[jobId] ? (jobsData[jobId].threshold||65) : 65;
+  if (sc.score >= threshold && p) {
+    lg('Score >= '+threshold+' — starting phone interview...', 'var(--grn)');
     setTimeout(async function() {
       var iv = await req('/api/pipeline/phone/start', 'POST', { candidate_id: cid, phone: p });
       if (iv.call_id) { lg('VAPI call placed — ' + iv.call_id, 'var(--grn)'); lg('Alex is calling ' + p + ' — answer the phone!', 'var(--cyn)'); }
@@ -594,8 +822,9 @@ async function processCandidate() {
       cands[cid] = await req('/api/candidate/' + cid);
       renderDash(); updateBadges();
     }, 1500);
-  } else if (sc.score < 70) { lg('Score < 70 — rejection email queued', 'var(--tx3)'); }
-  else { lg('No phone — add one to trigger interview', 'var(--amb)'); }
+  } else if (sc.score < threshold) {
+    lg('Score '+sc.score+' < threshold '+threshold+' — candidate will not advance', 'var(--red)');
+  } else { lg('No phone number — add one to trigger interview', 'var(--amb)'); }
 }
 
 // ── DASHBOARD ─────────────────────────────────────────────────────
@@ -722,21 +951,87 @@ function buildSlide(c) {
   h += '<button class="btn btn-sm btn-d" onclick="delCand(\''+c.id+'\')">Delete</button>';
   h += '</div>';
 
-  // ── Manual Loom submission (shown when in assignment_sent stage)
-  if (c.stage === 'assignment_sent' || c.stage === 'loom_submitted') {
-    var hasLoom = c.assignment && c.assignment.loom_url;
-    h += '<div style="background:var(--bg2);border:1px solid var(--cyn-bd);border-radius:9px;padding:1rem;margin-bottom:1rem">';
-    h += '<div style="font-size:10px;font-weight:700;color:var(--cyn);text-transform:uppercase;letter-spacing:.08em;font-family:\'JetBrains Mono\',monospace;margin-bottom:.6rem">🎬 Loom Submission</div>';
-    if (hasLoom) {
-      h += '<div style="font-size:12px;color:var(--grn);margin-bottom:.5rem">✓ Loom received: <a href="'+c.assignment.loom_url+'" target="_blank" style="color:var(--cyn)">'+c.assignment.loom_url+'</a></div>';
-    } else {
-      h += '<div style="font-size:12px;color:var(--tx3);margin-bottom:.65rem">Waiting for candidate to submit Loom. Paste the URL manually if they sent it directly:</div>';
-    }
-    h += '<div style="display:flex;gap:.5rem;align-items:center">';
-    h += '<input type="text" id="loom-url-'+c.id+'" placeholder="https://www.loom.com/share/..." style="flex:1;background:var(--bg3);border:1px solid var(--bd2);color:var(--tx);font-size:12px;padding:.5rem .75rem;border-radius:6px;outline:none;font-family:\'Inter\',sans-serif" value="'+(hasLoom?c.assignment.loom_url:'')+'">';
-    h += '<button class="btn btn-p" onclick="submitLoomManual(\''+c.id+'\')">Analyze →</button>';
+  // ── Loom submission section
+  var hasLoom  = c.assignment && c.assignment.loom_url;
+  var hasScore = c.assignment && c.assignment.score;
+  var loomStages = ['assignment_sent','loom_submitted','loom_complete','loom_analyzed','loom_complete'];
+  var showLoom = loomStages.includes(c.stage) || hasLoom || hasScore ||
+                 (c.assignment && (c.assignment.transcript || c.assignment.loom_url));
+
+  if (showLoom) {
+    var lsc  = hasScore ? (c.assignment.score.content_score||0) : null;
+    var lc   = lsc!==null ? (lsc>=75?'var(--grn)':lsc>=60?'var(--amb)':'var(--red)') : 'var(--cyn)';
+    var analyzing = c.stage === 'loom_submitted' && !hasScore;
+
+    h += '<div style="background:var(--bg2);border:1px solid var(--cyn-bd);border-radius:10px;padding:1.1rem 1.25rem;margin-bottom:1rem">';
+
+    // ── Header row
+    h += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.85rem">';
+    h += '<div style="font-size:10px;font-weight:700;color:var(--cyn);text-transform:uppercase;letter-spacing:.08em;font-family:\'JetBrains Mono\',monospace">🎬 Loom Assignment</div>';
+    if (lsc!==null) h += '<div style="font-size:18px;font-weight:700;color:'+lc+';font-family:\'JetBrains Mono\',monospace">'+lsc+'<span style="font-size:11px;color:var(--tx3)">/100</span></div>';
+    else if (analyzing) h += '<div style="font-size:10px;color:var(--amb);font-family:\'JetBrains Mono\',monospace;animation:pulse 1.5s infinite">⏳ Analyzing...</div>';
     h += '</div>';
-    h += '<div id="loom-result-'+c.id+'" style="margin-top:.4rem;font-size:11px;font-family:\'JetBrains Mono\',monospace;color:var(--tx3)"></div>';
+
+    // ── If Loom is already detected / analyzed — show summary card
+    if (hasLoom) {
+      h += '<div style="background:var(--bg3);border:1px solid '+(hasScore?lc:'var(--bd2)')+';border-radius:8px;padding:.75rem;margin-bottom:.75rem">';
+      h += '<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.4rem">';
+      h += '<span style="font-size:11px;color:var(--grn)">✓ Loom received</span>';
+      h += '<a href="'+c.assignment.loom_url+'" target="_blank" class="btn btn-sm btn-c" style="text-decoration:none;padding:.2rem .55rem;font-size:10px">▶ Watch Loom</a>';
+      h += '<button class="btn btn-sm" onclick="triggerLoomAnalysis(\''+c.id+'\')" style="font-size:10px;padding:.2rem .55rem">🔄 Re-analyze</button>';
+      h += '</div>';
+      h += '<div style="font-size:10px;color:var(--tx3);font-family:\'JetBrains Mono\',monospace;word-break:break-all">'+c.assignment.loom_url+'</div>';
+      if (hasScore) {
+        var ls2 = c.assignment.score;
+        if (ls2.what_they_built) h += '<div style="font-size:12px;color:var(--tx);margin-top:.5rem"><strong>Built:</strong> '+ls2.what_they_built+'</div>';
+        if (ls2.summary) h += '<div style="font-size:12px;color:var(--tx2);margin-top:.2rem;line-height:1.65">'+ls2.summary+'</div>';
+        if (ls2.human_review_notes) h += '<div style="font-size:11px;color:var(--amb);margin-top:.3rem;font-style:italic">'+ls2.human_review_notes+'</div>';
+      }
+      h += '</div>';
+    }
+
+    // ── Manual entry section (always shown — either to enter URL or override)
+    h += '<div style="border-top:1px solid var(--bd2);padding-top:.8rem;margin-top:'+(hasLoom?'.2rem':'.1rem')+'">';
+    h += '<div style="font-size:9px;font-weight:700;color:var(--tx3);text-transform:uppercase;letter-spacing:.06em;font-family:\'JetBrains Mono\',monospace;margin-bottom:.55rem">'+(hasLoom?'Override / Update':'📋 Paste Loom URL to Analyze')+'</div>';
+
+    // URL input + Analyze button
+    h += '<div style="display:flex;gap:.4rem;margin-bottom:.55rem">';
+    h += '<input type="text" id="loom-url-'+c.id+'" placeholder="https://www.loom.com/share/..." ';
+    h += 'style="flex:1;background:var(--bg3);border:1px solid var(--bd2);color:var(--tx);font-size:12px;padding:.5rem .75rem;border-radius:6px;outline:none;font-family:\'Inter\',sans-serif" ';
+    h += 'value="'+(hasLoom?c.assignment.loom_url:'')+'" oninput="this.style.borderColor=this.value.includes(\'loom.com\')?\'var(--grn)\':\\'var(--bd2)\\'">';
+    h += '<button class="btn btn-p" onclick="analyzeLoom(\''+c.id+'\')" style="white-space:nowrap;padding:.5rem .85rem;font-size:12px">🤖 Analyze →</button>';
+    h += '</div>';
+
+    // Optional: paste transcript for faster analysis
+    h += '<div style="margin-bottom:.55rem">';
+    h += '<label style="font-size:9px;font-weight:700;color:var(--tx3);text-transform:uppercase;letter-spacing:.06em;font-family:\'JetBrains Mono\',monospace;display:block;margin-bottom:.3rem">Transcript (optional — paste for instant AI scoring without Apify)</label>';
+    h += '<textarea id="loom-transcript-'+c.id+'" rows="3" placeholder="Paste the Loom transcript text here — Claude will score directly without needing Apify..." ';
+    h += 'style="width:100%;background:var(--bg3);border:1px solid var(--bd2);color:var(--tx);font-size:11px;padding:.45rem .75rem;border-radius:6px;outline:none;font-family:\'JetBrains Mono\',monospace;line-height:1.55;resize:vertical">';
+    h += (c.assignment&&c.assignment.transcript?c.assignment.transcript.slice(0,600):'')+'</textarea>';
+    h += '</div>';
+
+    // Manual score override row
+    h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:.45rem;margin-bottom:.55rem">';
+    h += '<div><label style="font-size:9px;font-weight:700;color:var(--tx3);text-transform:uppercase;letter-spacing:.06em;font-family:\'JetBrains Mono\',monospace;display:block;margin-bottom:.3rem">What They Built</label>';
+    h += '<input type="text" id="loom-built-'+c.id+'" placeholder="e.g. RAG pipeline with LangChain" ';
+    h += 'style="background:var(--bg3);border:1px solid var(--bd2);color:var(--tx);font-size:12px;padding:.45rem .75rem;border-radius:6px;outline:none;width:100%;font-family:\'Inter\',sans-serif" ';
+    h += 'value="'+(hasScore&&c.assignment.score.what_they_built?c.assignment.score.what_they_built:'')+'">';
+    h += '</div>';
+    h += '<div><label style="font-size:9px;font-weight:700;color:var(--tx3);text-transform:uppercase;letter-spacing:.06em;font-family:\'JetBrains Mono\',monospace;display:block;margin-bottom:.3rem">Manual Score Override (0-100)</label>';
+    h += '<input type="number" id="loom-score-'+c.id+'" min="0" max="100" placeholder="e.g. 72" ';
+    h += 'style="background:var(--bg3);border:1px solid var(--bd2);color:var(--tx);font-size:12px;padding:.45rem .75rem;border-radius:6px;outline:none;width:100%" ';
+    h += 'value="'+(hasScore&&c.assignment.score.content_score?c.assignment.score.content_score:'')+'">';
+    h += '</div></div>';
+
+    h += '<div style="margin-bottom:.6rem"><label style="font-size:9px;font-weight:700;color:var(--tx3);text-transform:uppercase;letter-spacing:.06em;font-family:\'JetBrains Mono\',monospace;display:block;margin-bottom:.3rem">Reviewer Notes</label>';
+    h += '<textarea id="loom-notes-'+c.id+'" rows="2" placeholder="Your observations after watching..." ';
+    h += 'style="width:100%;background:var(--bg3);border:1px solid var(--bd2);color:var(--tx);font-size:12px;padding:.45rem .75rem;border-radius:6px;outline:none;font-family:\'Inter\',sans-serif;line-height:1.6;resize:vertical">';
+    h += (hasScore&&c.assignment.score.summary?c.assignment.score.summary:'')+'</textarea></div>';
+
+    h += '<button class="btn" style="width:100%;font-size:11px" onclick="saveLoomDetails(\''+c.id+'\')">💾 Save Manual Details</button>';
+    h += '</div>';// end manual section
+
+    h += '<div id="loom-result-'+c.id+'" style="margin-top:.5rem;font-size:11px;font-family:\'JetBrains Mono\',monospace;color:var(--tx3)"></div>';
     h += '</div>';
   }
   if (hasCall && !hasScore) {
@@ -1512,42 +1807,90 @@ async function sendTestEmail() {
   }
 }
 
-async function submitLoomManual(cid) {
-  var input = document.getElementById('loom-url-'+cid);
-  var result = document.getElementById('loom-result-'+cid);
-  if (!input) return;
-  var url = input.value.trim();
-  if (!url || !url.includes('loom.com')) {
-    if(result) { result.style.color='var(--red)'; result.textContent='Enter a valid loom.com URL'; }
+// ── LOOM ──────────────────────────────────────────────────────────
+async function analyzeLoom(cid) {
+  var urlEl        = document.getElementById('loom-url-'+cid);
+  var transcriptEl = document.getElementById('loom-transcript-'+cid);
+  var resultEl     = document.getElementById('loom-result-'+cid);
+  if (!urlEl) return;
+
+  var url        = urlEl.value.trim();
+  var transcript = transcriptEl ? transcriptEl.value.trim() : '';
+
+  if (!url && !transcript) {
+    if(resultEl){ resultEl.style.color='var(--red)'; resultEl.textContent='Paste a Loom URL or transcript first'; }
     return;
   }
-  if(result) { result.style.color='var(--tx3)'; result.textContent='⏳ Submitting Loom for analysis...'; }
-  try {
-    var r = await req('/api/candidate/'+cid+'/loom','POST',{loom_url: url});
-    if (r.ok) {
-      if(result) { result.style.color='var(--grn)'; result.textContent='✓ Loom received — analyzing now (~30s)...'; }
-      // Poll for analysis completion
-      var tries = 0;
-      var poll = setInterval(async function(){
-        tries++;
-        var c2 = await req('/api/candidate/'+cid);
-        cands[cid] = c2;
-        if (c2.assignment && c2.assignment.score) {
-          clearInterval(poll);
-          var sc = c2.assignment.score.content_score || 0;
-          if(result) { result.style.color='var(--grn)'; result.textContent='✓ Loom analyzed — Score: '+sc+'/100'; }
-          buildSlide(c2); renderDash(); updateBadges();
-        } else if (tries > 20) {
-          clearInterval(poll);
-          if(result) result.textContent = 'Analysis in progress — refresh to check';
-        }
-      }, 3000);
-    } else {
-      if(result) { result.style.color='var(--red)'; result.textContent='Error: '+(r.error||'unknown'); }
-    }
-  } catch(e) {
-    if(result) { result.style.color='var(--red)'; result.textContent='Error: '+e.message; }
+  if (url && !url.includes('loom.com')) {
+    if(resultEl){ resultEl.style.color='var(--red)'; resultEl.textContent='URL must be a loom.com/share link'; }
+    return;
   }
+
+  if(resultEl){ resultEl.style.color='var(--tx3)'; resultEl.textContent='⏳ Submitting for AI analysis...'; }
+
+  try {
+    // Step 1 — save URL + optional transcript
+    var payload = {};
+    if (url) payload.loom_url = url;
+    if (transcript) payload.transcript = transcript;
+
+    var r = await req('/api/candidate/'+cid+'/loom','POST', url ? {loom_url:url} : {loom_url:'manual'});
+
+    // If transcript provided, save it via details endpoint immediately for faster scoring
+    if (transcript) {
+      await req('/api/candidate/'+cid+'/loom/details','POST',{
+        loom_url: url || undefined, transcript: transcript
+      });
+    }
+
+    if(resultEl) resultEl.textContent = '⏳ Analyzing' + (transcript?' transcript':' Loom via Apify') + ' — checking every 3s...';
+
+    // Poll for analysis completion
+    var tries = 0;
+    var poll = setInterval(async function(){
+      tries++;
+      var c2 = await req('/api/candidate/'+cid);
+      cands[cid] = c2;
+      if (c2.assignment && c2.assignment.score) {
+        clearInterval(poll);
+        var sc = c2.assignment.score.content_score || 0;
+        var col = sc>=75?'var(--grn)':sc>=60?'var(--amb)':'var(--red)';
+        if(resultEl){ resultEl.style.color=col; resultEl.textContent='✓ Analysis complete — Score: '+sc+'/100 — '+( c2.assignment.score.verdict||''); }
+        buildSlide(c2); renderDash(); updateBadges();
+      } else if (tries > 25) {
+        clearInterval(poll);
+        if(resultEl){ resultEl.style.color='var(--amb)'; resultEl.textContent='Analysis taking longer than usual — refresh to check'; }
+      }
+    }, 3000);
+  } catch(e) {
+    if(resultEl){ resultEl.style.color='var(--red)'; resultEl.textContent='Error: '+e.message; }
+  }
+}
+
+async function triggerLoomAnalysis(cid) {
+  // Re-analyze with existing URL
+  var c = cands[cid];
+  var resultEl = document.getElementById('loom-result-'+cid);
+  if (!c || !c.assignment || !c.assignment.loom_url) {
+    if(resultEl){ resultEl.style.color='var(--red)'; resultEl.textContent='No Loom URL on file'; }
+    return;
+  }
+  if(resultEl){ resultEl.style.color='var(--tx3)'; resultEl.textContent='⏳ Re-running analysis...'; }
+  try {
+    await req('/api/candidate/'+cid+'/loom','POST',{loom_url: c.assignment.loom_url});
+    var tries=0;
+    var poll=setInterval(async function(){
+      tries++;
+      var c2=await req('/api/candidate/'+cid);
+      cands[cid]=c2;
+      if(c2.assignment&&c2.assignment.score&&tries>1){
+        clearInterval(poll);
+        var sc=c2.assignment.score.content_score||0;
+        if(resultEl){resultEl.style.color='var(--grn)';resultEl.textContent='✓ Re-analysis complete — '+sc+'/100';}
+        buildSlide(c2);renderDash();updateBadges();
+      }else if(tries>25){clearInterval(poll);if(resultEl)resultEl.textContent='Timeout — refresh to check';}
+    },3000);
+  } catch(e){ if(resultEl){resultEl.style.color='var(--red)';resultEl.textContent='Error: '+e.message;} }
 }
 async function checkInbox() {
   var btn=document.getElementById('inbox-btn');
@@ -1562,21 +1905,26 @@ async function checkInbox() {
     } else if (r.emails_read === 0) {
       txt = 'No emails found';
     } else if (r.processed && r.processed.length > 0) {
-      txt = '✓ '+r.emails_read+' emails · Loom found for: '+r.processed.map(function(p){return p.name;}).join(', ')+' → analyzing';
+      txt = '✓ '+r.processed.length+' Loom(s) matched → analyzing now';
       await refreshAll();
-    } else {
-      txt = r.emails_read+' emails read · No Loom links matched any candidate';
-      if (r.raw_emails && r.raw_emails.length) {
-        console.log('[INBOX] Emails read:');
-        r.raw_emails.forEach(function(e){ console.log('  from='+e.from+' | loom='+e.loom_url+' | preview='+e.body_preview); });
+    } else if (r.unmatched && r.unmatched.length > 0) {
+      var u = r.unmatched[0];
+      txt = '⚠ Loom found from unknown sender — open candidate panel and paste URL manually';
+      console.log('[INBOX] Unmatched Loom:', u);
+      if (selId) {
+        var urlEl = document.getElementById('loom-url-'+selId);
+        if (urlEl && !urlEl.value) { urlEl.value = u.loom_url; urlEl.style.borderColor='var(--grn)'; }
       }
+    } else {
+      txt = r.emails_read+' email(s) read · No Loom links found';
+      if (r.raw_emails) r.raw_emails.forEach(function(e){ console.log('[INBOX]',e.from,'|',e.loom_url,'|',e.body_preview.slice(0,80)); });
     }
-    if(msg) { msg.textContent = txt; }
+    if(msg) msg.textContent = txt;
   } catch(e) {
     if(msg) msg.textContent = '✗ '+e.message;
   }
   btn.disabled=false;
-  setTimeout(function(){ if(msg) msg.textContent=''; }, 8000);
+  setTimeout(function(){ if(msg) msg.textContent=''; }, 9000);
 }
 
 // ── UTILS ─────────────────────────────────────────────────────────
@@ -1594,6 +1942,12 @@ function updateBadges() {
 }
 
 setInterval(refreshAll,20000);
+// Init
+loadJobsDropdown();
+req('/api/settings').then(function(s){
+  if(s.company){ var nm=document.getElementById('logo-company'); var mk=document.getElementById('logo-mark'); if(nm)nm.textContent=s.company; if(mk)mk.textContent=(s.company[0]||'C').toUpperCase(); }
+  if(s.sender_email){ var chip=document.getElementById('sb-email-chip'); if(chip)chip.textContent=s.sender_email; }
+});
 
 // ── URL PARAM: ?iv=candidateId opens interview room directly ───────
 (function(){
