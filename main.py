@@ -391,13 +391,13 @@ def _extract_gmail_body(payload: dict) -> str:
 
     return text
 settings_db = {
-    "company": "Click Theory Capital",
+    "company": "Company AXZ",
     "recruiter_name": "Alex",
     "role": "AI/ML Engineer",
     "reviewer_email": "prathyusha.hyra@gmail.com",
     "sender_email": "prathyusha.hyra@gmail.com",
-    "phone_script": "You are Alex, a senior AI recruiter at Click Theory Capital.\nCandidate: {name} | Role: {role}\n\nSTRUCTURE (15 min):\n1. Warm welcome + Click Theory intro (1 min)\n2. Walk me through your most impressive AI project (3 min)\n3. How do you handle non-deterministic LLM output in production? (3 min)\n4. Describe a multi-step autonomous agent you built (3 min)\n5. Build a lead qualification agent in one week — your approach? (3 min)\n6. Why AI engineering + motivation (2 min)\n7. Close + next steps (1 min)\n\nBe warm but professional. Probe vague answers. End: 'We will be in touch within 48 hours.'\nDo not reveal you are an AI.",
-    "assignment_template": "Hi {name},\n\nCongratulations — you have passed the phone interview for the {role} role at Click Theory Capital!\n\nFor the next stage, please complete this technical assignment within 72 hours:\n\nTASK: Build an AI-powered lead qualification agent\n1. Accept a list of company names as input\n2. Research each company using web search\n3. Score each lead against an ICP (B2B, 50-500 employees, tech-forward)\n4. Draft a personalized outreach email per lead\n5. Return structured JSON output\n\nTech: Python + any LLM API (Claude preferred)\nSubmit your Loom walkthrough at: {submit_url}\n\nWe look forward to seeing what you build!\nThe Click Theory Capital Team",
+    "phone_script": "You are Alex, a senior AI recruiter at {company}.\nCandidate: {name} | Role: {role}\n\nSTRUCTURE (15 min):\n1. Warm welcome + company intro (1 min)\n2. Walk me through your most impressive AI project (3 min)\n3. How do you handle non-deterministic LLM output in production? (3 min)\n4. Describe a multi-step autonomous agent you built (3 min)\n5. Build a lead qualification agent in one week — your approach? (3 min)\n6. Why AI engineering + motivation (2 min)\n7. Close + next steps (1 min)\n\nBe warm but professional. Probe vague answers. End: 'We will be in touch within 48 hours.'\nDo not reveal you are an AI.",
+    "assignment_template": "Hi {name},\n\nCongratulations — you have passed the phone interview for the {role} role at {settings_db.get('company','Company AXZ')}!\n\nFor the next stage, please complete this technical assignment within 72 hours:\n\nTASK: Build an AI-powered lead qualification agent\n1. Accept a list of company names as input\n2. Research each company using web search\n3. Score each lead against an ICP (B2B, 50-500 employees, tech-forward)\n4. Draft a personalized outreach email per lead\n5. Return structured JSON output\n\nTech: Python + any LLM API (Claude preferred)\nSubmit your Loom walkthrough at: {submit_url}\n\nWe look forward to seeing what you build!\nThe {settings_db.get('company','Company AXZ')} Team",
     "job_profile": {
         "criteria": "3+ years Python. LLM API experience (OpenAI/Anthropic). Production AI deployment. Agentic frameworks (LangChain/CrewAI). RAG + vector databases.",
         "mustHave": "Production AI systems, LLM API hands-on, agent/workflow experience",
@@ -650,7 +650,7 @@ async def screen_resume(request: Request):
         profile = settings_db.get("job_profile", {})
         role_name = settings_db.get("role","AI/ML Engineer")
 
-    company = settings_db.get("company","Click Theory Capital")
+    company = settings_db.get("company","Company AXZ")
 
     raw = await ask_claude(
         f"""You are an expert hiring manager at {company}.
@@ -813,7 +813,7 @@ async def start_phone(request: Request, background_tasks: BackgroundTasks):
         phone = "+" + phone
 
     script = settings_db["phone_script"].format(
-        name=cand["name"], role=settings_db["role"])
+        name=cand["name"], role=settings_db["role"], company=settings_db.get("company","Company AXZ"))
 
     vapi_payload = {
         "phoneNumberId": VAPI_PHONE_ID,
@@ -823,7 +823,7 @@ async def start_phone(request: Request, background_tasks: BackgroundTasks):
         },
         "assistantId": VAPI_ASSISTANT_ID,
         "assistantOverrides": {
-            "firstMessage": f"Hi, is this {cand['name']}? This is Alex calling from Click Theory Capital — I'm reaching out about the {settings_db['role']} position you applied for. Do you have about 15 minutes for a quick phone screen?"
+            "firstMessage": f"Hi, is this {cand['name']}? This is Alex calling from {settings_db.get('company','Company AXZ')} — I'm reaching out about the {settings_db['role']} position you applied for. Do you have about 15 minutes for a quick phone screen?"
         },
         "metadata": {"candidate_id": cid, "stage": "phone"}
     }
@@ -878,7 +878,7 @@ async def _analyze_phone(cid: str):
 
     add_event(cid, "Analyzing interview with Claude...")
     raw = await ask_claude(
-        "You are a senior hiring manager at Click Theory Capital. Analyze this phone interview for an AI Engineer role. Return ONLY valid JSON: {" + chr(10) +
+        "You are a senior hiring manager at {settings_db.get('company','Company AXZ')}. Analyze this phone interview for an AI Engineer role. Return ONLY valid JSON: {" + chr(10) +
         '  "overall_score": 0,' + chr(10) +
         '  "verdict": "Advance|Maybe|Reject",' + chr(10) +
         '  "dimensions": [' + chr(10) +
@@ -909,7 +909,7 @@ async def _analyze_phone(cid: str):
                 name=cand["name"], role=settings_db["role"])
             body_txt = tmpl.get("body", settings_db["assignment_template"]).format(
                 name=cand["name"], role=settings_db["role"],
-                submit_url=f"{APP_URL}/submit/{cid}")
+                submit_url=f"{APP_URL}/submit/{cid}", company=settings_db.get("company","Company AXZ"))
             await _send_email(cand["email"], subj, body_txt)
             cand["stage"] = "assignment_sent"
             add_event(cid, f"Assignment email sent to {cand['email']}")
@@ -931,7 +931,7 @@ INTERVIEW_QUESTIONS = [
     "Describe a multi-step autonomous agent you have built — what was the architecture?",
     "If you had one week to build a lead qualification agent for us, what would your approach be?",
     "What excites you most about AI engineering right now?",
-    "What questions do you have for us about the role at Click Theory Capital?"
+    "What questions do you have for us about the role at {settings_db.get('company','Company AXZ')}?"
 ]
 
 @app.post("/api/interview/start")
@@ -949,7 +949,7 @@ async def interview_start(request: Request):
     add_event(cid, "Text/voice interview session started")
 
     first_q = INTERVIEW_QUESTIONS[0]
-    intro = f"Hi {cand['name']}! I am Alex from Click Theory Capital. I will be conducting your technical interview today for the {settings_db['role']} position. I will ask you {len(INTERVIEW_QUESTIONS)} questions. Take your time with each answer. Let us begin.\n\n{first_q}"
+    intro = f"Hi {cand['name']}! I am Alex from {settings_db.get('company','Company AXZ')}. I will be conducting your technical interview today for the {settings_db['role']} position. I will ask you {len(INTERVIEW_QUESTIONS)} questions. Take your time with each answer. Let us begin.\n\n{first_q}"
 
     cand["video_interview"]["qa_log"].append({
         "q_index": 0,
@@ -1033,7 +1033,7 @@ async def _analyze_video_interview(cid: str):
     cand["video_interview"]["transcript"] = transcript
 
     raw = await ask_claude(
-        f"""You are a senior hiring manager at Click Theory Capital.
+        f"""You are a senior hiring manager at {settings_db.get('company','Company AXZ')}.
 Analyze this technical interview for the {settings_db['role']} role.
 Return ONLY valid JSON:
 {{
@@ -1219,7 +1219,7 @@ async def submit_page(cid: str):
     cand = candidates_db.get(cid)
     name = cand["name"] if cand else "Candidate"
     return HTMLResponse(f"""<!DOCTYPE html>
-<html><head><meta charset="UTF-8"/><title>Submit — Click Theory Capital</title>
+<html><head><meta charset="UTF-8"/><title>Submit — {settings_db.get('company','Company AXZ')}</title>
 <style>*{{box-sizing:border-box}}body{{font-family:-apple-system,sans-serif;max-width:480px;margin:4rem auto;padding:2rem;background:#09090b;color:#e4e4e7}}
 h1{{font-size:22px;font-weight:600;margin-bottom:.4rem}}p{{color:#a1a1aa;line-height:1.65;margin-bottom:1.5rem;font-size:14px}}
 input{{width:100%;padding:.8rem;border:1px solid #27272a;border-radius:8px;font-size:14px;margin-bottom:1rem;background:#18181b;color:#e4e4e7}}
@@ -1334,7 +1334,7 @@ Return ONLY valid JSON:
         what_they_built = result.get("what_they_built", "")
         loom_summary    = result.get("summary", "")
         tech_qs_raw = await ask_claude(
-            f"""You are a senior technical interviewer at Click Theory Capital evaluating an AI Engineer candidate.
+            f"""You are a senior technical interviewer at {settings_db.get('company','Company AXZ')} evaluating an AI Engineer candidate.
 The candidate submitted a Loom video of their assignment. Based on what they built, generate 6 challenging follow-up technical questions.
 Questions should:
 - Probe technical depth on choices they made
@@ -1371,7 +1371,7 @@ Return ONLY valid JSON:
         submit_url = f"{APP_URL}/submit/{cid}"
         interview_url = f"{APP_URL}?iv={cid}"
         await _send_email(cand["email"],
-            f"Final Stage — Technical Video Interview — {settings_db['role']} — Click Theory Capital",
+            f"Final Stage — Technical Video Interview — {settings_db['role']} — {settings_db.get('company','Company AXZ')}",
             f"""Hi {cand['name']},
 
 Congratulations — your Loom assignment has been reviewed and we're impressed with your work!
@@ -1386,7 +1386,7 @@ To start your video interview, click here:
 The interview takes approximately 20-25 minutes. You can use text or voice to answer.
 
 We look forward to seeing you!
-The Click Theory Capital Team""")
+The {settings_db.get('company','Company AXZ')} Team""")
         add_event(cid, f"Technical interview invitation sent to {cand['email']}")
 
     except Exception as e:
@@ -1412,10 +1412,10 @@ async def _send_rejection(cid: str, stage: str):
     if not cand or not cand.get("email"):
         return
     tmpl = email_templates_db.get("rejection", {})
-    subj = tmpl.get("subject", "Click Theory Capital — Application Update").format(
-        name=cand["name"], role=settings_db.get("role",""))
+    subj = tmpl.get("subject", "Application Update").format(
+        name=cand["name"], role=settings_db.get("role",""), company=settings_db.get("company","Company AXZ"))
     body_txt = tmpl.get("body", "").format(
-        name=cand["name"], role=settings_db.get("role",""))
+        name=cand["name"], role=settings_db.get("role",""), company=settings_db.get("company","Company AXZ"))
     await _send_email(cand["email"], subj, body_txt)
     candidates_db[cid]["stage"] = f"rejected_{stage}"
     add_event(cid, f"Rejection sent after {stage}")
@@ -1586,10 +1586,10 @@ async def human_decision(request: Request):
     add_event(cid, f"Human decision: {decision.upper()}")
     if decision == "hire":
         tmpl = email_templates_db.get("offer", {})
-        subj = tmpl.get("subject", "Offer — Click Theory Capital").format(
-            name=cand["name"], role=settings_db.get("role",""))
+        subj = tmpl.get("subject", "Offer").format(
+            name=cand["name"], role=settings_db.get("role",""), company=settings_db.get("company","Company AXZ"))
         body_txt = tmpl.get("body", "").format(
-            name=cand["name"], role=settings_db.get("role",""))
+            name=cand["name"], role=settings_db.get("role",""), company=settings_db.get("company","Company AXZ"))
         await _send_email(cand["email"], subj, body_txt)
     return JSONResponse({"status": "ok", "stage": cand["stage"]})
 
@@ -1678,24 +1678,24 @@ async def delete_candidate(cid: str):
 
 email_templates_db = {
     "assignment": {
-        "subject": "Next Step — Technical Assignment — {role} — Click Theory Capital",
-        "body": "Hi {name},\n\nCongratulations — you have passed the phone interview for the {role} role at Click Theory Capital!\n\nFor the next stage, please complete this technical assignment within 72 hours:\n\nTASK: Build an AI-powered lead qualification agent\n1. Accept a list of company names as input\n2. Research each company using web search\n3. Score each lead against an ICP (B2B, 50-500 employees, tech-forward)\n4. Draft a personalized outreach email per lead\n5. Return structured JSON output\n\nTech: Python + any LLM API (Claude preferred)\nSubmit your Loom walkthrough at: {submit_url}\n\nWe look forward to seeing what you build!\n\nBest,\nAlex\nClick Theory Capital Recruiting"
+        "subject": "Next Step — Technical Assignment — {role} — {settings_db.get('company','Company AXZ')}",
+        "body": "Hi {name},\n\nCongratulations — you have passed the phone interview for the {role} role at {settings_db.get('company','Company AXZ')}!\n\nFor the next stage, please complete this technical assignment within 72 hours:\n\nTASK: Build an AI-powered lead qualification agent\n1. Accept a list of company names as input\n2. Research each company using web search\n3. Score each lead against an ICP (B2B, 50-500 employees, tech-forward)\n4. Draft a personalized outreach email per lead\n5. Return structured JSON output\n\nTech: Python + any LLM API (Claude preferred)\nSubmit your Loom walkthrough at: {submit_url}\n\nWe look forward to seeing what you build!\n\nBest,\nAlex\n{settings_db.get('company','Company AXZ')} Recruiting"
     },
     "interview_invite": {
-        "subject": "Final Stage — Technical Video Interview — {role} — Click Theory Capital",
-        "body": "Hi {name},\n\nCongratulations — your Loom assignment has been reviewed and we're impressed!\n\nYou've been selected for the final stage: a Technical Video Interview with our AI interviewer Alex.\n\nThis is a deeper technical session that will build on your assignment. Expect harder questions about your architectural choices and technical decisions.\n\nStart your video interview here:\n{interview_url}\n\nThe interview takes approximately 20-25 minutes. You can use text or voice to answer.\n\nWe look forward to speaking with you!\n\nBest,\nAlex\nClick Theory Capital Recruiting"
+        "subject": "Final Stage — Technical Video Interview — {role} — {settings_db.get('company','Company AXZ')}",
+        "body": "Hi {name},\n\nCongratulations — your Loom assignment has been reviewed and we're impressed!\n\nYou've been selected for the final stage: a Technical Video Interview with our AI interviewer Alex.\n\nThis is a deeper technical session that will build on your assignment. Expect harder questions about your architectural choices and technical decisions.\n\nStart your video interview here:\n{interview_url}\n\nThe interview takes approximately 20-25 minutes. You can use text or voice to answer.\n\nWe look forward to speaking with you!\n\nBest,\nAlex\n{settings_db.get('company','Company AXZ')} Recruiting"
     },
     "offer": {
-        "subject": "Offer — {role} — Click Theory Capital 🎉",
-        "body": "Hi {name},\n\nWe are thrilled to extend you an offer for the {role} role at Click Theory Capital!\n\nYour performance throughout the interview process was outstanding. Someone from our team will reach out within 24 hours to discuss compensation, start date, and next steps.\n\nWelcome to the team!\n\nBest,\nThe Click Theory Capital Team"
+        "subject": "Offer — {role} — {settings_db.get('company','Company AXZ')} 🎉",
+        "body": "Hi {name},\n\nWe are thrilled to extend you an offer for the {role} role at {settings_db.get('company','Company AXZ')}!\n\nYour performance throughout the interview process was outstanding. Someone from our team will reach out within 24 hours to discuss compensation, start date, and next steps.\n\nWelcome to the team!\n\nBest,\nThe {settings_db.get('company','Company AXZ')} Team"
     },
     "rejection": {
-        "subject": "Click Theory Capital — Application Update",
-        "body": "Hi {name},\n\nThank you for your time and interest in the {role} role at Click Theory Capital.\n\nAfter careful consideration, we have decided to move forward with other candidates at this time. This was a competitive process and we appreciate you taking the time to interview with us.\n\nWe will keep your profile on file for future opportunities.\n\nBest of luck,\nAlex\nClick Theory Capital Recruiting"
+        "subject": "Company AXZ — Application Update",
+        "body": "Hi {name},\n\nThank you for your time and interest in the {role} role at {settings_db.get('company','Company AXZ')}.\n\nAfter careful consideration, we have decided to move forward with other candidates at this time. This was a competitive process and we appreciate you taking the time to interview with us.\n\nWe will keep your profile on file for future opportunities.\n\nBest of luck,\nAlex\n{settings_db.get('company','Company AXZ')} Recruiting"
     },
     "outreach": {
-        "subject": "Exciting AI Engineering Role at Click Theory Capital",
-        "body": "Hi {name},\n\nI came across your profile and was impressed by your background in AI engineering. We have an exciting {role} role at Click Theory Capital that I think could be a great fit.\n\nWe're building cutting-edge AI systems for B2B sales intelligence. The role involves LLM APIs, agentic frameworks, and production AI deployment.\n\nWould you be open to a quick 15-minute call to learn more?\n\nBest,\nAlex\nClick Theory Capital Recruiting"
+        "subject": "Exciting AI Engineering Role at {settings_db.get('company','Company AXZ')}",
+        "body": "Hi {name},\n\nI came across your profile and was impressed by your background in AI engineering. We have an exciting {role} role at {settings_db.get('company','Company AXZ')} that I think could be a great fit.\n\nWe're building cutting-edge AI systems for B2B sales intelligence. The role involves LLM APIs, agentic frameworks, and production AI deployment.\n\nWould you be open to a quick 15-minute call to learn more?\n\nBest,\nAlex\n{settings_db.get('company','Company AXZ')} Recruiting"
     }
 }
 
@@ -1735,7 +1735,7 @@ async def test_send_email(request: Request):
     msg     = body.get("body", "This is a test email.")
     try:
         result = await ask_claude(
-            f"You are the AI recruiting system for Click Theory Capital using Gmail account {AI_EMAIL}. Send emails exactly as instructed. Call the Gmail send tool immediately.",
+            f"You are the AI recruiting system for {settings_db.get('company','Company AXZ')} using Gmail account {AI_EMAIL}. Send emails exactly as instructed. Call the Gmail send tool immediately.",
             f"Send this email NOW using Gmail:\n\nTo: {to}\nSubject: {subject}\n\nBody:\n{msg}\n\nCall the Gmail send tool now.",
             max_tokens=400, mcp_servers=[get_gmail_mcp()]
         )
@@ -1830,7 +1830,7 @@ async def interview_evaluate(request: Request):
     qa_text = "\n\n".join([f"Q: {item['q']}\nA: {item['a']}" for item in qa_log])
 
     raw = await ask_claude(
-        f"""You are a senior hiring manager at Click Theory Capital evaluating a video interview for a {role} role.
+        f"""You are a senior hiring manager at {settings_db.get('company','Company AXZ')} evaluating a video interview for a {role} role.
 Analyze these question-answer pairs and return ONLY valid JSON:
 {{
   "overall_score": 0-100,
