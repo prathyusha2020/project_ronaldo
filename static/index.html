@@ -100,8 +100,8 @@ textarea{resize:vertical;line-height:1.6;font-family:'JetBrains Mono',monospace;
 .slide-head{padding:1.1rem 1.25rem;border-bottom:1px solid var(--bd2);flex-shrink:0;display:flex;align-items:flex-start;gap:.75rem}
 .slide-x{background:none;border:none;color:var(--tx3);font-size:16px;cursor:pointer;padding:.25rem;margin-left:auto;line-height:1;flex-shrink:0}
 .slide-body{flex:1;overflow-y:auto;padding:1.25rem 1.5rem}
-.assess-card{background:var(--bg2);border:1px solid var(--grn-bd);border-radius:10px;padding:1rem 1.25rem;margin:.5rem 0 .85rem}
-.assess-text{font-size:13px;color:var(--tx);line-height:1.9;white-space:pre-wrap;word-break:break-word}
+.assess-card{background:var(--bg2);border:1px solid var(--grn-bd);border-radius:10px;padding:1.25rem 1.4rem;margin:.5rem 0 1rem}
+.assess-text{font-size:13.5px;color:var(--tx);line-height:1.95;font-family:'Inter',sans-serif;font-weight:400;text-align:left;white-space:pre-wrap;word-break:break-word}
 .iv-transcript-area{width:100%;min-height:120px;background:var(--bg2);border:1px solid var(--bd2);color:var(--tx);font-family:'JetBrains Mono',monospace;font-size:11px;padding:.65rem .85rem;border-radius:7px;outline:none;resize:vertical;line-height:1.6;margin-bottom:.5rem}
 .iv-transcript-area:focus{border-color:var(--grn)}
 .sring{width:60px;height:60px;border-radius:50%;border:2.5px solid var(--bd2);display:flex;align-items:center;justify-content:center;flex-direction:column;flex-shrink:0}
@@ -507,13 +507,13 @@ async function processCandidate() {
 function renderDash() {
   var all = Object.values(cands);
   document.getElementById('d-tot').textContent = all.length;
-  document.getElementById('d-act').textContent = all.filter(function(c) { return !['hired','passed','rejected_phone'].includes(c.stage); }).length;
-  document.getElementById('d-ph').textContent = all.filter(function(c) { return ['phone_analyzed','assignment_sent','loom_submitted','video_complete','ready_for_review'].includes(c.stage); }).length;
+  document.getElementById('d-act').textContent = all.filter(function(c) { return !['hired','passed'].includes(c.stage); }).length;
+  document.getElementById('d-ph').textContent = all.filter(function(c) { return ['phone_analyzed','phone_complete','assignment_sent','loom_submitted','loom_complete','video_complete','video_analyzed','ready_for_review'].includes(c.stage); }).length;
   document.getElementById('d-rtr').textContent = all.filter(function(c) { return c.stage === 'ready_for_review'; }).length;
   document.getElementById('d-hi').textContent = all.filter(function(c) { return c.stage === 'hired'; }).length;
 
   var stages = [
-    {k:'profiled',l:'Screened',c:'var(--tx3)'},
+    {k:'screened',l:'Screened',c:'var(--tx3)'},
     {k:'phone',l:'Phone',c:'var(--vio)'},
     {k:'assignment',l:'Assignment',c:'var(--amb)'},
     {k:'loom',l:'Loom',c:'var(--cyn)'},
@@ -521,21 +521,37 @@ function renderDash() {
     {k:'review',l:'Review',c:'var(--grn)'}
   ];
   function grp(s,k) {
-    if (k==='profiled') return s==='profiled';
-    if (k==='phone') return ['phone_interview','phone_complete','phone_analyzed'].includes(s);
-    if (k==='assignment') return s==='assignment_sent';
-    if (k==='loom') return ['loom_submitted','loom_analyzed'].includes(s);
-    if (k==='video') return s==='video_complete';
+    if (k==='screened') return ['profiled','rejected_resume','rejected_screen'].includes(s);
+    if (k==='phone') return ['phone_interview','phone_complete','phone_analyzed','rejected_phone'].includes(s);
+    if (k==='assignment') return ['assignment_sent'].includes(s);
+    if (k==='loom') return ['loom_submitted','loom_complete','loom_analyzed','loom_analyzed'].includes(s);
+    if (k==='video') return ['video_interview','video_complete','video_analyzed'].includes(s);
     if (k==='review') return ['ready_for_review','hired','passed'].includes(s);
+    // Catch-all: anything not matched goes to screened
     return false;
   }
+  // Make sure every candidate appears somewhere
+  var allStages = all.map(function(c){return c.stage;});
+  function findCol(s) {
+    var keys = ['screened','phone','assignment','loom','video','review'];
+    for(var i=0;i<keys.length;i++) if(grp(s,keys[i])) return keys[i];
+    return 'screened'; // fallback
+  }
   document.getElementById('kanban').innerHTML = stages.map(function(st) {
-    var g = all.filter(function(c) { return grp(c.stage, st.k); });
+    var g = all.filter(function(c) { return findCol(c.stage) === st.k; });
     return '<div class="kcol"><div class="kch"><span class="kct" style="color:'+st.c+'">'+st.l+'</span><span class="kcn">'+g.length+'</span></div>' +
       g.map(function(c) {
         var sc = c.final_score||c.score||0;
         var bc = sc>=75?'var(--grn)':sc>=50?'var(--amb)':'var(--red)';
-        return '<div class="kcard" onclick="openSlide(\''+c.id+'\')"><div class="kc-sc" style="color:'+bc+'">'+sc+'</div><div class="kc-n">'+c.name+'</div><div class="kc-s">'+c.stage+'</div><div class="prog"><div class="prog-f" style="width:'+sc+'%;background:'+bc+'"></div></div></div>';
+        var rejected = (c.stage||'').includes('reject')||c.stage==='passed';
+        var dimmed = rejected ? 'opacity:.55;' : '';
+        var stageLbl = c.stage||'';
+        return '<div class="kcard" style="'+dimmed+'" onclick="openSlide(\''+c.id+'\')">'+
+          '<div class="kc-sc" style="color:'+bc+'">'+sc+'</div>'+
+          '<div class="kc-n">'+c.name+'</div>'+
+          '<div class="kc-s">'+stageLbl+'</div>'+
+          '<div class="prog"><div class="prog-f" style="width:'+sc+'%;background:'+(rejected?'var(--red)':bc)+'"></div></div>'+
+          '</div>';
       }).join('') + '</div>';
   }).join('');
 
@@ -624,14 +640,24 @@ function buildSlide(c) {
   // ── AI Assessment (FULL, readable card)
   if (c.assessment) {
     h += '<div class="assess-card">';
-    h += '<div style="font-size:10px;font-weight:700;color:var(--grn);text-transform:uppercase;letter-spacing:.08em;font-family:\'JetBrains Mono\',monospace;margin-bottom:.65rem">🧠 AI Assessment</div>';
-    h += '<div class="assess-text">'+c.assessment+'</div>';
+    h += '<div style="font-size:10px;font-weight:700;color:var(--grn);text-transform:uppercase;letter-spacing:.1em;font-family:\'JetBrains Mono\',monospace;margin-bottom:.75rem">🧠 AI Assessment</div>';
+    // Render assessment as readable paragraphs
+    var assessParagraphs = (c.assessment||'').split('\n').filter(function(p){return p.trim();}).map(function(p){
+      return '<p style="margin:0 0 .65rem;font-size:13.5px;color:var(--tx);line-height:1.85;font-family:\'Inter\',sans-serif">'+p+'</p>';
+    }).join('');
+    h += assessParagraphs || '<p style="margin:0;font-size:13.5px;color:var(--tx);line-height:1.85">'+c.assessment+'</p>';
     // Show dimensions if available
     if (c.dimensions&&c.dimensions.length) {
-      h += '<div style="margin-top:.85rem;display:grid;grid-template-columns:1fr 1fr;gap:.4rem">';
+      h += '<div style="margin-top:.85rem;border-top:1px solid var(--bd2);padding-top:.85rem;display:grid;grid-template-columns:1fr 1fr;gap:.5rem">';
       c.dimensions.forEach(function(d){
         var dc=d.score>=7?'var(--grn)':d.score>=5?'var(--amb)':'var(--red)';
-        h += '<div style="background:var(--bg3);border-radius:6px;padding:.5rem .65rem"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.2rem"><span style="font-size:10px;color:var(--tx2)">'+d.name+'</span><span style="font-size:11px;font-weight:700;color:'+dc+';font-family:\'JetBrains Mono\',monospace">'+d.score+'</span></div><div style="font-size:10px;color:var(--tx3);line-height:1.4">'+( d.note||'')+'</div></div>';
+        h += '<div style="background:var(--bg3);border:1px solid var(--bd2);border-radius:7px;padding:.6rem .75rem">';
+        h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.25rem">';
+        h += '<span style="font-size:11px;font-weight:600;color:var(--tx)">'+d.name+'</span>';
+        h += '<span style="font-size:13px;font-weight:700;color:'+dc+';font-family:\'JetBrains Mono\',monospace">'+d.score+'<span style="font-size:9px;color:var(--tx3)">/10</span></span>';
+        h += '</div>';
+        if (d.note) h += '<div style="font-size:11px;color:var(--tx3);line-height:1.45">'+d.note+'</div>';
+        h += '</div>';
       });
       h += '</div>';
     }
