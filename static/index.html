@@ -1273,14 +1273,16 @@ async function sendTestEmail() {
   var body = document.getElementById('test-body').value.trim();
   var resultEl = document.getElementById('test-result');
   if (!to || !subject) { if(resultEl) resultEl.textContent = 'Fill in To and Subject'; return; }
-  if(resultEl) { resultEl.textContent = '⏳ Sending...'; resultEl.style.color = 'var(--tx3)'; }
+  if(resultEl) { resultEl.textContent = '⏳ Sending (agentic loop — may take 10s)...'; resultEl.style.color = 'var(--tx3)'; }
   try {
     var r = await req('/api/email/send', 'POST', { to: to, subject: subject, body: body });
-    if (r.ok) {
-      var tools = (r.tools_called||[]).map(function(t){return t.name;}).join(', ');
-      if(resultEl) { resultEl.style.color='var(--grn)'; resultEl.textContent = '✓ Sent! Tools: '+tools; }
+    if (r.ok && r.tools_called && r.tools_called.length > 0) {
+      var tools = r.tools_called.map(function(t){return t.name;}).join(', ');
+      if(resultEl) { resultEl.style.color='var(--grn)'; resultEl.textContent = '✓ Sent via Gmail! Tool: '+tools; }
+    } else if (r.warning) {
+      if(resultEl) { resultEl.style.color='var(--amb)'; resultEl.textContent = '⚠ '+r.warning+' — check Railway logs'; }
     } else {
-      if(resultEl) { resultEl.style.color='var(--red)'; resultEl.textContent = '✗ Error: '+(r.error||'unknown'); }
+      if(resultEl) { resultEl.style.color='var(--red)'; resultEl.textContent = '✗ '+(r.error||'No tools called — Gmail MCP may need re-auth'); }
     }
   } catch(e) {
     if(resultEl) { resultEl.style.color='var(--red)'; resultEl.textContent = '✗ '+e.message; }
@@ -1289,13 +1291,31 @@ async function sendTestEmail() {
 
 // ── INBOX ─────────────────────────────────────────────────────────
 async function checkInbox() {
-  var btn=document.getElementById('inbox-btn'); var msg=document.getElementById('inbox-msg');
-  btn.disabled=true; msg.textContent='Checking...';
-  var r = await req('/api/check-inbox','POST');
-  msg.textContent = r.found ? r.found+' submission(s) found' : 'No new submissions';
+  var btn=document.getElementById('inbox-btn');
+  var msg=document.getElementById('inbox-msg');
+  btn.disabled=true;
+  if(msg) msg.textContent='Reading last 5 emails...';
+  try {
+    var r = await req('/api/check-inbox','POST');
+    var txt = '';
+    if (r.error) {
+      txt = '✗ Error: '+r.error;
+    } else if (r.emails_read === 0) {
+      txt = 'Inbox empty or MCP not connected';
+    } else if (r.loom_found > 0 && r.processed && r.processed.length > 0) {
+      txt = '✓ '+r.emails_read+' emails read · '+r.processed.length+' Loom(s) found → processing';
+    } else if (r.loom_found > 0) {
+      txt = r.emails_read+' emails read · Loom found but no matching candidate';
+    } else {
+      txt = r.emails_read+' emails read · No Loom links found';
+    }
+    if(msg) { msg.textContent = txt; }
+    if (r.processed && r.processed.length) await refreshAll();
+  } catch(e) {
+    if(msg) msg.textContent = '✗ '+e.message;
+  }
   btn.disabled=false;
-  if (r.processed&&r.processed.length) await refreshAll();
-  setTimeout(function(){msg.textContent='';},4000);
+  setTimeout(function(){ if(msg) msg.textContent=''; }, 6000);
 }
 
 // ── UTILS ─────────────────────────────────────────────────────────
