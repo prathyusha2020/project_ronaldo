@@ -191,7 +191,7 @@ textarea{resize:vertical;line-height:1.6;font-family:'JetBrains Mono',monospace;
   <div class="sb-div"></div>
   <div class="sb-group">Tools</div>
   <div class="nav" onclick="gv('interview',this)"><span class="nav-ic">🎙</span>Video Interview Room</div>
-  <div class="nav" onclick="gv('templates',this);loadTemplates()"><span class="nav-ic">✉</span>Email Templates</div>
+  <div class="nav" onclick="gv('templates',this);loadTemplates();checkGmailStatus()"><span class="nav-ic">✉</span>Email Templates</div>
   <div class="nav" onclick="gv('integrations',this)"><span class="nav-ic">⊕</span>Integrations</div>
   <div class="sb-foot"><div class="sb-chip">prathyusha.hyra@gmail.com</div></div>
 </div>
@@ -362,15 +362,27 @@ textarea{resize:vertical;line-height:1.6;font-family:'JetBrains Mono',monospace;
 
     <!-- Test email sender -->
     <div class="card" style="border-color:var(--blu-bd)">
-      <div class="ctitle" style="color:var(--blu)">📬 Send Test Email</div>
+      <div class="ctitle" style="color:var(--blu)">📬 Gmail Connection & Test</div>
+      <div id="gmail-status" style="margin-bottom:.85rem;padding:.75rem;background:var(--bg2);border-radius:8px;font-size:12px;font-family:'JetBrains Mono',monospace">
+        Checking Gmail connection...
+      </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:.65rem;margin-bottom:.65rem">
         <div class="field" style="margin:0"><label>To</label><input type="email" id="test-to" value="prathyusha.hyra@gmail.com" placeholder="recipient@email.com"/></div>
         <div class="field" style="margin:0"><label>Subject</label><input type="text" id="test-subject" value="Test — Project Ronaldo Email Check"/></div>
       </div>
-      <div class="field" style="margin-bottom:.65rem"><label>Body</label><textarea id="test-body" rows="3" style="font-family:'Inter',sans-serif;font-size:12px">Hi! This is a test email from Project Ronaldo to verify Gmail MCP is working correctly. If you receive this, emails are sending! ✓</textarea></div>
-      <div style="display:flex;gap:.5rem;align-items:center">
+      <div class="field" style="margin-bottom:.65rem"><label>Body</label><textarea id="test-body" rows="3" style="font-family:'Inter',sans-serif;font-size:12px">Hi! This is a test email from Project Ronaldo to verify Gmail is working correctly. If you receive this, emails are sending! ✓</textarea></div>
+      <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
         <button class="btn btn-p" onclick="sendTestEmail()">Send Test Email →</button>
+        <button class="btn" onclick="checkGmailStatus()">🔄 Check Status</button>
         <span id="test-result" style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--tx3)"></span>
+      </div>
+      <div style="margin-top:.75rem;padding:.65rem;background:var(--bg2);border:1px solid var(--bd2);border-radius:7px;font-size:11px;color:var(--tx3);line-height:1.7">
+        <strong style="color:var(--tx2)">How to connect Gmail:</strong><br>
+        1. Get a Google OAuth token at <a href="https://developers.google.com/oauthplayground" target="_blank" style="color:var(--blu)">OAuth Playground</a><br>
+        2. Select <strong>Gmail API v1</strong> scopes: gmail.send + gmail.readonly<br>
+        3. Exchange for tokens → copy Access Token + Refresh Token<br>
+        4. Set in Railway: <code style="background:var(--bg3);padding:1px 5px;border-radius:3px">GOOGLE_ACCESS_TOKEN</code> and <code style="background:var(--bg3);padding:1px 5px;border-radius:3px">GOOGLE_REFRESH_TOKEN</code><br>
+        5. Or POST to <code style="background:var(--bg3);padding:1px 5px;border-radius:3px">/api/auth/token</code> with <code>{"{"}access_token, refresh_token{"}"}</code>
       </div>
     </div>
 
@@ -1235,6 +1247,19 @@ function b64toBlob(b64, mime) {
 
 // ── EMAIL TEMPLATES ───────────────────────────────────────────────
 var tmplData = {};
+
+async function checkGmailStatus() {
+  var el = document.getElementById('gmail-status');
+  if (!el) return;
+  try {
+    var r = await req('/api/auth/status');
+    if (r.gmail_connected) {
+      el.innerHTML = '<span style="color:var(--grn)">✓ Gmail connected</span> — token: <code style="background:var(--bg3);padding:1px 6px;border-radius:3px">'+r.token_preview+'</code> · refresh: '+(r.has_refresh_token?'<span style="color:var(--grn)">✓</span>':'<span style="color:var(--amb)">✗ no refresh token — token expires hourly</span>');
+    } else {
+      el.innerHTML = '<span style="color:var(--red)">✗ Gmail not connected</span> — set <code style="background:var(--bg3);padding:1px 5px;border-radius:3px">GOOGLE_ACCESS_TOKEN</code> in Railway env vars, then redeploy';
+    }
+  } catch(e) { el.textContent = 'Status check failed: '+e.message; }
+}
 
 async function loadTemplates() {
   try {
