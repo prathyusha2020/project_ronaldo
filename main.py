@@ -511,13 +511,13 @@ async def _analyze_phone(cid: str):
         verdict = result.get("verdict", "")
         add_event(cid, f"Phone analyzed — {score}/100 — {verdict}", score)
         if score >= 65 and verdict != "Reject":
-            body_txt = settings_db["assignment_template"].format(
+            tmpl = email_templates_db.get("assignment", {})
+            subj = tmpl.get("subject", "Next Step — Technical Assignment").format(
+                name=cand["name"], role=settings_db["role"])
+            body_txt = tmpl.get("body", settings_db["assignment_template"]).format(
                 name=cand["name"], role=settings_db["role"],
-                submit_url=f"{APP_URL}/submit/{cid}"
-            )
-            await _send_email(cand["email"],
-                f"Next Step — Technical Assignment — {settings_db['role']} — Click Theory Capital",
-                body_txt)
+                submit_url=f"{APP_URL}/submit/{cid}")
+            await _send_email(cand["email"], subj, body_txt)
             cand["stage"] = "assignment_sent"
             add_event(cid, f"Assignment email sent to {cand['email']}")
         else:
@@ -1006,26 +1006,38 @@ The Click Theory Capital Team""")
 
 async def _send_email(to: str, subject: str, body: str):
     if not to:
+        print(f"[EMAIL] Skipped — no recipient address")
         return
     try:
-        await ask_claude(
-            f"You are {AI_EMAIL}. Send emails using Gmail.",
-            f"Send this email:\nTo: {to}\nSubject: {subject}\nBody:\n{body}\n\nConfirm sent.",
-            max_tokens=200, mcp_servers=[GMAIL_MCP]
+        system = (
+            f"You are an automated email assistant for {AI_EMAIL} at Click Theory Capital. "
+            f"Your ONLY job is to send emails using the Gmail tool. "
+            f"Always call the Gmail send tool immediately with the exact details provided. "
+            f"Do not ask for confirmation. Do not modify the content."
         )
+        prompt = (
+            f"Send an email RIGHT NOW using the Gmail send tool with exactly these details:\n\n"
+            f"To: {to}\n"
+            f"Subject: {subject}\n"
+            f"Body:\n{body}\n\n"
+            f"Call the Gmail send tool now."
+        )
+        result = await ask_claude(system, prompt, max_tokens=500, mcp_servers=[GMAIL_MCP])
+        print(f"[EMAIL] ✓ Sent to {to} | Subject: {subject[:60]} | MCP result: {result[:120]}")
     except Exception as e:
-        print(f"Email error: {e}")
+        print(f"[EMAIL] ✗ Error sending to {to}: {e}")
 
 
 async def _send_rejection(cid: str, stage: str):
     cand = candidates_db.get(cid)
     if not cand or not cand.get("email"):
         return
-    await _send_email(
-        cand["email"],
-        "Click Theory Capital — Application Update",
-        f"Hi {cand['name']},\n\nThank you for your time interviewing with Click Theory Capital.\n\nAfter careful consideration we have decided to move forward with other candidates at this time.\n\nWe appreciate your interest and will keep your profile on file.\n\nBest,\nAlex — Click Theory Capital Recruiting"
-    )
+    tmpl = email_templates_db.get("rejection", {})
+    subj = tmpl.get("subject", "Click Theory Capital — Application Update").format(
+        name=cand["name"], role=settings_db.get("role",""))
+    body_txt = tmpl.get("body", "").format(
+        name=cand["name"], role=settings_db.get("role",""))
+    await _send_email(cand["email"], subj, body_txt)
     candidates_db[cid]["stage"] = f"rejected_{stage}"
     add_event(cid, f"Rejection sent after {stage}")
 
@@ -1153,9 +1165,12 @@ async def human_decision(request: Request):
     cand["stage"]          = "hired" if decision == "hire" else "passed"
     add_event(cid, f"Human decision: {decision.upper()}")
     if decision == "hire":
-        await _send_email(cand["email"],
-            "Offer — Click Theory Capital",
-            f"Hi {cand['name']},\n\nWe are thrilled to extend you an offer for the {settings_db['role']} role at Click Theory Capital!\n\nSomeone will reach out within 24 hours to discuss next steps.\n\nWelcome!\nThe Click Theory Capital Team")
+        tmpl = email_templates_db.get("offer", {})
+        subj = tmpl.get("subject", "Offer — Click Theory Capital").format(
+            name=cand["name"], role=settings_db.get("role",""))
+        body_txt = tmpl.get("body", "").format(
+            name=cand["name"], role=settings_db.get("role",""))
+        await _send_email(cand["email"], subj, body_txt)
     return JSONResponse({"status": "ok", "stage": cand["stage"]})
 
 
@@ -1179,6 +1194,98 @@ async def delete_candidate(cid: str):
 
 
 # ══════════════════════════════════════════════════════════════════
+# EMAIL TEMPLATES (editable)
+# ══════════════════════════════════════════════════════════════════
+
+email_templates_db = {
+    "assignment": {
+        "subject": "Next Step — Technical Assignment — {role} — Click Theory Capital",
+        "body": "Hi {name},\n\nCongratulations — you have passed the phone interview for the {role} role at Click Theory Capital!\n\nFor the next stage, please complete this technical assignment within 72 hours:\n\nTASK: Build an AI-powered lead qualification agent\n1. Accept a list of company names as input\n2. Research each company using web search\n3. Score each lead against an ICP (B2B, 50-500 employees, tech-forward)\n4. Draft a personalized outreach email per lead\n5. Return structured JSON output\n\nTech: Python + any LLM API (Claude preferred)\nSubmit your Loom walkthrough at: {submit_url}\n\nWe look forward to seeing what you build!\n\nBest,\nAlex\nClick Theory Capital Recruiting"
+    },
+    "interview_invite": {
+        "subject": "Final Stage — Technical Video Interview — {role} — Click Theory Capital",
+        "body": "Hi {name},\n\nCongratulations — your Loom assignment has been reviewed and we're impressed!\n\nYou've been selected for the final stage: a Technical Video Interview with our AI interviewer Alex.\n\nThis is a deeper technical session that will build on your assignment. Expect harder questions about your architectural choices and technical decisions.\n\nStart your video interview here:\n{interview_url}\n\nThe interview takes approximately 20-25 minutes. You can use text or voice to answer.\n\nWe look forward to speaking with you!\n\nBest,\nAlex\nClick Theory Capital Recruiting"
+    },
+    "offer": {
+        "subject": "Offer — {role} — Click Theory Capital 🎉",
+        "body": "Hi {name},\n\nWe are thrilled to extend you an offer for the {role} role at Click Theory Capital!\n\nYour performance throughout the interview process was outstanding. Someone from our team will reach out within 24 hours to discuss compensation, start date, and next steps.\n\nWelcome to the team!\n\nBest,\nThe Click Theory Capital Team"
+    },
+    "rejection": {
+        "subject": "Click Theory Capital — Application Update",
+        "body": "Hi {name},\n\nThank you for your time and interest in the {role} role at Click Theory Capital.\n\nAfter careful consideration, we have decided to move forward with other candidates at this time. This was a competitive process and we appreciate you taking the time to interview with us.\n\nWe will keep your profile on file for future opportunities.\n\nBest of luck,\nAlex\nClick Theory Capital Recruiting"
+    },
+    "outreach": {
+        "subject": "Exciting AI Engineering Role at Click Theory Capital",
+        "body": "Hi {name},\n\nI came across your profile and was impressed by your background in AI engineering. We have an exciting {role} role at Click Theory Capital that I think could be a great fit.\n\nWe're building cutting-edge AI systems for B2B sales intelligence. The role involves LLM APIs, agentic frameworks, and production AI deployment.\n\nWould you be open to a quick 15-minute call to learn more?\n\nBest,\nAlex\nClick Theory Capital Recruiting"
+    }
+}
+
+@app.get("/api/email/templates")
+async def get_email_templates():
+    return JSONResponse(email_templates_db)
+
+@app.post("/api/email/templates")
+async def save_email_templates(request: Request):
+    body = await request.json()
+    email_templates_db.update(body)
+    return JSONResponse({"ok": True})
+
+@app.post("/api/email/send")
+async def send_email_direct(request: Request):
+    """Direct email send with full debug output"""
+    body    = await request.json()
+    to      = body.get("to", "")
+    subject = body.get("subject", "")
+    msg     = body.get("body", "")
+    if not to or not subject:
+        return JSONResponse({"ok": False, "error": "missing to/subject"}, status_code=400)
+    try:
+        system = (
+            f"You are an automated email assistant for {AI_EMAIL} at Click Theory Capital. "
+            f"Your ONLY job is to send the email using Gmail. Call the send tool immediately."
+        )
+        prompt = (
+            f"Send this email NOW using Gmail:\n\nTo: {to}\nSubject: {subject}\nBody:\n{msg}\n\n"
+            f"Call the Gmail send tool immediately."
+        )
+        # Use raw httpx to capture the full MCP response for debugging
+        payload = {
+            "model": MODEL,
+            "max_tokens": 500,
+            "system": system,
+            "messages": [{"role": "user", "content": prompt}],
+            "mcp_servers": [GMAIL_MCP]
+        }
+        async with httpx.AsyncClient(timeout=120) as client:
+            resp = await client.post("https://api.anthropic.com/v1/messages",
+                                     headers=HEADERS_MCP, json=payload)
+        data = resp.json()
+        # Extract all content blocks for full visibility
+        blocks = data.get("content", [])
+        text_parts = [b.get("text","") for b in blocks if b.get("type")=="text"]
+        tool_uses  = [{"name": b.get("name",""), "input": b.get("input",{})} for b in blocks if b.get("type")=="tool_use"]
+        tool_results = []
+        for b in blocks:
+            if b.get("type") == "mcp_tool_result":
+                for inner in b.get("content",[]):
+                    if inner.get("type") == "text":
+                        tool_results.append(inner.get("text",""))
+        full_text = "\n".join(text_parts)
+        print(f"[EMAIL DIRECT] to={to} | tools_called={[t['name'] for t in tool_uses]} | result={full_text[:150]}")
+        return JSONResponse({
+            "ok": True,
+            "sent_to": to,
+            "tools_called": tool_uses,
+            "tool_results": tool_results,
+            "response_text": full_text,
+            "raw_blocks": len(blocks)
+        })
+    except Exception as e:
+        print(f"[EMAIL DIRECT] Error: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+# ══════════════════════════════════════════════════════════════════
 # TEST ENDPOINTS
 # ══════════════════════════════════════════════════════════════════
 
@@ -1191,14 +1298,14 @@ async def test_send_email(request: Request):
     msg     = body.get("body", "This is a test email.")
     try:
         result = await ask_claude(
-            f"You are the AI recruiting system for Click Theory Capital using Gmail account {AI_EMAIL}. Send emails exactly as instructed.",
-            f"Send this email now using Gmail:\n\nTo: {to}\nSubject: {subject}\n\nBody:\n{msg}\n\nAfter sending, confirm with: SENT",
-            max_tokens=300, mcp_servers=[GMAIL_MCP]
+            f"You are the AI recruiting system for Click Theory Capital using Gmail account {AI_EMAIL}. Send emails exactly as instructed. Call the Gmail send tool immediately.",
+            f"Send this email NOW using Gmail:\n\nTo: {to}\nSubject: {subject}\n\nBody:\n{msg}\n\nCall the Gmail send tool now.",
+            max_tokens=400, mcp_servers=[GMAIL_MCP]
         )
-        print(f"[EMAIL] Sent to {to} | Result: {result[:100]}")
-        return JSONResponse({"ok": True, "sent_to": to, "result": result[:200]})
+        print(f"[EMAIL TEST] Sent to {to} | Result: {result[:100]}")
+        return JSONResponse({"ok": True, "sent_to": to, "result": result[:300]})
     except Exception as e:
-        print(f"[EMAIL] Error: {e}")
+        print(f"[EMAIL TEST] Error: {e}")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 
